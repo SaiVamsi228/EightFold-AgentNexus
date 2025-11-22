@@ -1,115 +1,92 @@
 from fastapi import FastAPI, Request
-from app.graph import app_graph
+from app.graph import app_graph, InterviewState
 from reportlab.lib.pagesizes import letter
 from reportlab.pdfgen import canvas
 import uuid
-import os
+import json
 
 app = FastAPI()
 
 @app.get("/")
-def read_root():
-    return {"status": "Interview Agent Active"}
+def home():
+    return {"status": "Eightfold Interview Coach Ready"}
 
-# app/main.py  (only this function changes)
-
-@app.post("/chat")
-async def chat_endpoint(request: Request):
+@app.post("/webhook")
+async def webhook(request: Request):
     data = await request.json()
-
-    # Vapi always sends the full conversation history
     conversation = data.get("conversation", [])
-    
-    # Find the latest user message
-    user_messages = [m for m in conversation if m["role"] == "user"]
-    if not user_messages:
-        user_input = "Start interview"
-    else:
-        user_input = user_messages[-1]["content"]
 
-    # Extract role from the very first user message
-    all_user_text = " ".join([m["content"] for m in user_messages]).lower()
-    if any(x in all_user_text for x in ["sdr", "sales"]):
+    # Reconstruct full history
+    messages = []
+    for msg in conversation:
+        if msg["role"] in ["user", "assistant"]:
+            messages.append({"role": msg["role"], "content": msg.get("content", "")})
+
+    # Detect role from entire history
+    user_text = " ".join([m["content"] for m in messages if m["role"] == "user"]).lower()
+    if any(x in user_text for x in ["sdr", "sales"]):
         role = "SDR"
-    elif "retail" in all_user_text:
+    elif "retail" in user_text:
         role = "Retail Associate"
     else:
         role = "Software Engineer"
 
-    # Reconstruct full message history in LangGraph format
-    messages = []
-    for msg in conversation:
-        if msg["role"] == "user":
-            messages.append({"role": "user", "content": msg["content"]})
-        elif msg["role"] == "assistant" and msg["content"]:
-            messages.append({"role": "assistant", "content": msg["content"]})
+    # Count real questions asked
+    questions_asked = [m for m in messages if m["role"] == "assistant" and ("?" in m["content"] or m["content"].startswith(("Tell me", "Describe", "Explain", "Walk me")))]
+    question_count = len(questions_asked)
 
-    # Count how many real questions the assistant has already asked
-    assistant_questions = [m for m in messages if m["role"] == "assistant" and ("?" in m["content"] or m["content"].startswith(("Tell me", "Describe", "Explain", "Walk me")))]
-    question_count = len(assistant_questions)
-
-    # Build proper persistent state
-    initial_state: InterviewState = {
-        "messages": messages + [{"role": "user", "content": user_input}],  # add latest
+    # Build state
+    state: InterviewState = {
+        "messages": messages,
         "role": role,
         "question_count": question_count,
-        "current_question_type": "behavioral",  # will be overridden by logic inside nodes
         "persona_detected": "Normal",
         "latest_evaluation": "Good",
         "is_finished": False,
         "feedback": None
     }
 
-    # Run the graph with full history
-    result = app_graph.invoke(initial_state)
+    # Run agent
+    result = app_graph.invoke(state)
+    assistant_reply = result["messages"][-1]["content"]
 
-    # Extract the assistant's reply
-    bot_reply = result["messages"][-1]["content"]
-
-    # If interview finished → generate PDF (optional)
-    if result.get("is_finished") and result.get("feedback"):
+    # Generate PDF on finish
+    if result.get("is_finished"):
         try:
             create_pdf(result["feedback"])
-            bot_reply += "\n\nI’ve also created a detailed PDF feedback report for you!"
+            assistant_reply += "\n\nI've also generated a detailed PDF feedback report for you!"
         except Exception as e:
-            print("PDF error:", e)
+            print("PDF failed:", e)
 
-    # Vapi expects this exact format
+    # Vapi tool response format
+    tool_call_id = data.get("message", {}).get("toolCall", {}).get("id", "no-id")
     return {
-        "results": [
-            {
-                "toolCallId": data.get("message", {}).get("toolCall", {}).get("id", "no-id"),
-                "result": bot_reply
-            }
-        ]
+        "results": [{
+            "toolCallId": tool_call_id,
+            "result": assistant_reply
+        }]
     }
 
-def create_pdf(feedback_data):
+def create_pdf(feedback: dict):
     filename = f"feedback_{uuid.uuid4().hex[:8]}.pdf"
     c = canvas.Canvas(filename, pagesize=letter)
     width, height = letter
-
-    c.setFont("Helvetica-Bold", 16)
-    c.drawString(50, height - 50, "Interview Feedback Report")
-
-    c.setFont("Helvetica", 12)
-    y = height - 80
-
-    c.drawString(50, y, f"Overall Score: {feedback_data.get('score', 'N/A')}/10")
-    y -= 30
-
+    c.setFont("Helvetica-Bold", 20)
+    c.drawString(50, height - 100, "Eightfold Interview Feedback")
+    c.setFont("Helvetica", 14)
+    y = height - 150
+    c.drawString(50, y, f"Score: {feedback.get('score', 8)}/10")
+    y -= 40
     c.drawString(50, y, "Strengths:")
+    y -= 25
+    for s in feedback.get("strengths", []):
+        c.drawString(70, y, f"• {s}")
+        y -= 20
     y -= 20
-    for s in feedback_data.get("strengths", []):
-        c.drawString(70, y, f"- {s}")
-        y -= 15
-
-    y -= 20
-    c.drawString(50, y, "Areas for Improvement:")
-    y -= 20
-    for i in feedback_data.get("improvements", []):
-        c.drawString(70, y, f"- {i}")
-        y -= 15
-
+    c.drawString(50, y, "Improvements:")
+    y -= 25
+    for i in feedback.get("improvements", []):
+        c.drawString(70, y, f"• {i}")
+        y -= 20
     c.save()
-    return filename
+    print(f"PDF saved: {filename}")
