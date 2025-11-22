@@ -83,11 +83,11 @@ def ask_new_question(state: InterviewState) -> InterviewState:
     q_type = "behavioral" if state["question_count"] % 2 == 0 else "technical"
     base_question = random.choice(questions[q_type])
     
-    # HANDLING EFFICIENT USER: Skip the fluff 
-    if state["persona_detected"] == "Efficient":
-        final_q = base_question # Just the question, no pleasantries
-    elif state["question_count"] == 0:
+    # LOGIC: If count is 0, we MUST do the intro.
+    if state["question_count"] == 0:
         final_q = f"Great. Let's start the {state['role']} interview. {base_question}"
+    elif state["persona_detected"] == "Efficient":
+        final_q = base_question
     else:
         final_q = f"Got it. Next question: {base_question}"
     
@@ -99,23 +99,36 @@ def ask_new_question(state: InterviewState) -> InterviewState:
 
 # --- NODE 3: HANDLE SPECIAL (PERSONA RESPONDER) ---
 def handle_special(state: InterviewState) -> InterviewState:
-    last_q = next((m["content"] for m in reversed(state["messages"]) if m["role"] == "assistant"), "the interview")
+    # We get the last question, but we truncate it if it's too long to prevent massive repetition
+    last_q = next((m["content"] for m in reversed(state["messages"]) if m["role"] == "assistant"), "the interview topic")
+    if len(last_q) > 100: 
+        last_q = "the previous question" # Prevent repeating a paragraph
+
     user_input = state["messages"][-1]["content"]
     persona = state["persona_detected"]
     
-    sys_prompt = "You are an Interviewer. Speak directly to the candidate. Be professional."
+    sys_prompt = """
+    You are a professional Interviewer. 
+    1. Acknowledge what the user just said.
+    2. Pivot back to the interview.
+    3. Keep it under 2 sentences.
+    """
     
-    # --- PERSONA LOGIC [cite: 36-41] ---
+    # --- IMPROVED PROMPTS ---
     if persona == "Confused":
-        task = f"User is nervous/stuck on '{last_q}'. Reassure them warmly and ask a much simpler version."
+        task = f"User is nervous: '{user_input}'. Say: 'That is totally okay.' Then ask a very simple question about {state['role']}."
+        
     elif persona == "Chatty":
-        task = f"User is rambling about '{user_input}'. Politely interrupt, validate briefly, and steer back to '{last_q}'."
+        task = f"User is distracted by: '{user_input}'. Say something human like 'I hear that, but let's focus.' Then ask: '{last_q}'."
+        
     elif persona == "Edge":
-        task = f"User said '{user_input}' which is invalid/rude. Firmly state you are an Interview Practice Agent and return to '{last_q}'."
+        task = f"User said weird/rude text: '{user_input}'. Firmly reset: 'Let's stay professional.' Return to: '{last_q}'."
+        
     elif state["latest_evaluation"] == "Vague":
-        task = f"User answer '{user_input}' was too short. Ask for a specific example."
+        task = f"User answer '{user_input}' was too short. Ask them to give a specific example."
+        
     else:
-        task = f"Steer back to the interview topic: {last_q}"
+        task = f"Politely steer the user back to the topic of {state['role']}."
 
     reply = llm.invoke([SystemMessage(content=sys_prompt), HumanMessage(content=task)]).content.strip().replace('"','')
     return {**state, "messages": state["messages"] + [{"role": "assistant", "content": reply}]}
