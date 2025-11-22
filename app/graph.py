@@ -157,34 +157,20 @@ def handle_special(state: InterviewState) -> InterviewState:
     user_input = state["messages"][-1]["content"]
     persona = state["persona_detected"]
     
-    sys_prompt = "You are an Interviewer. Speak directly to the candidate."
-    
-    # FIX 3: Explicit instruction to rephrase the SAME topic
-    if persona == "Confused":
-        task = f"""
-        The candidate is stuck on this question: "{last_q}".
-        They said: "{user_input}".
-        
-        Your Goal:
-        1. Validate their feeling (e.g., "That's a tricky one").
-        2. Do NOT move to a new topic.
-        3. Rephrase "{last_q}" in very simple, layman's terms. Explain the core concept simply and ask them to try again.
-        """
-        
-    elif persona == "Chatty":
-        task = f"User is rambling about '{user_input}'. Politely interrupt: 'I hear you, but let's focus.' Then repeat the question: '{last_q}'."
-        
-    elif persona == "Edge":
-        task = f"User said '{user_input}' which is invalid/rude. Firmly state you are an Interview Practice Agent. Then repeat: '{last_q}'."
-        
-    elif state["latest_evaluation"] == "Vague":
-        task = f"User answer '{user_input}' to the question '{last_q}' was too short. Ask them to provide a specific example or detail."
-        
-    else:
-        task = f"Politely steer the user back to the topic: {last_q}"
+    # In app/graph.py -> handle_special function
 
-    reply = llm.invoke([SystemMessage(content=sys_prompt), HumanMessage(content=task)]).content.strip().replace('"','')
-    return {**state, "messages": state["messages"] + [{"role": "assistant", "content": reply}]}
+    # ... inside the function ...
+    sys_prompt = "You are an Interviewer. Be concise. Output ONLY the spoken response (1-2 sentences max)."
+
+    if persona == "Confused":
+        task = f"User is nervous about '{last_q}'. Say: 'No problem.' Then ask a much simpler version of the question."
+    elif persona == "Chatty":
+        task = f"User is distracted by '{user_input}'. Say: 'I hear that, but let's stay focused.' Then repeat: '{last_q}'."
+    elif state["latest_evaluation"] == "Vague":
+        task = f"User answer '{user_input}' was too short. Ask for a specific example."
+    else:
+        # This handles the 'Off-topic' case where you talked about the dog initially
+        task = f"Politely acknowledge the input, then immediately repeat the question: '{last_q}'."
 
 # --- NODE 4: FEEDBACK ---
 def generate_feedback(state: InterviewState) -> InterviewState:
