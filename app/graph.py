@@ -12,7 +12,7 @@ load_dotenv()
 
 # Use the stable model alias
 llm = ChatGoogleGenerativeAI(
-    model="gemini-1.5-flash", 
+    model="gemini-2.0-flash", 
     temperature=0.4 # Lower temp for better JSON consistency
 )
 
