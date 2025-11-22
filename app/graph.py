@@ -1,8 +1,9 @@
+# app/graph.py (Updated for Gemini - Added HumanMessage to analyze_input to fix "No content messages found" error)
 import json
 import random
 from typing import TypedDict, List, Dict, Any
 from langgraph.graph import StateGraph, END
-from langchain_google_genai import ChatGoogleGenerativeAI  # Switched from langchain_openai
+from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_core.messages import HumanMessage, SystemMessage
 import os
 from dotenv import load_dotenv
@@ -25,7 +26,7 @@ def load_questions(role: str):
         data = json.load(f)
     return data.get(role, data["Software Engineer"])
 
-# NODE 1: ANALYZE
+# NODE 1: ANALYZE (FIXED: Added HumanMessage with user_input for Gemini)
 def analyze_input(state: InterviewState) -> InterviewState:
     history = "\n".join([f"{m['role'].capitalize()}: {m['content']}" for m in state["messages"][-10:]])
     user_input = state["messages"][-1]["content"]
@@ -49,7 +50,8 @@ Return ONLY valid JSON:
 {{ "persona": "string", "evaluation": "string" }}
 """
     try:
-        resp = llm.invoke([SystemMessage(content=prompt)])
+        # FIXED: Added HumanMessage to satisfy Gemini's requirement for non-system messages
+        resp = llm.invoke([SystemMessage(content=prompt), HumanMessage(content=user_input)])
         cleaned = resp.content.strip().replace("```json", "").replace("```", "")
         data = json.loads(cleaned)
     except Exception as e:
@@ -62,7 +64,7 @@ Return ONLY valid JSON:
         "latest_evaluation": data["evaluation"]
     }
 
-# NODE 2: ASK NEW QUESTION
+# NODE 2: ASK NEW QUESTION (Already has HumanMessage - no change needed)
 def ask_new_question(state: InterviewState) -> InterviewState:
     questions = load_questions(state["role"])
     q_type = "behavioral" if state["question_count"] % 2 == 0 else "technical"
@@ -76,7 +78,7 @@ def ask_new_question(state: InterviewState) -> InterviewState:
     new_messages = state["messages"] + [{"role": "assistant", "content": question}]
     return {**state, "messages": new_messages, "question_count": state["question_count"] + 1}
 
-# NODE 3: HANDLE SPECIAL
+# NODE 3: HANDLE SPECIAL (Already has HumanMessage - no change needed)
 def handle_special(state: InterviewState) -> InterviewState:
     last_q = next((m["content"] for m in reversed(state["messages"]) if m["role"] == "assistant"), "")
     if state["latest_evaluation"] in ["Vague", "Off-topic"] or state["persona_detected"] in ["Chatty", "Edge"]:
@@ -87,7 +89,7 @@ def handle_special(state: InterviewState) -> InterviewState:
     reply = llm.invoke([HumanMessage(content=prompt)]).content
     return {**state, "messages": state["messages"] + [{"role": "assistant", "content": reply}]}
 
-# NODE 4: FEEDBACK
+# NODE 4: FEEDBACK (Already has HumanMessage - no change needed)
 def generate_feedback(state: InterviewState) -> InterviewState:
     transcript = "\n".join([f"{m['role']}: {m['content']}" for m in state["messages"]])
     prompt = f"""
