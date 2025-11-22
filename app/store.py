@@ -1,20 +1,15 @@
-# app/store.py
-from typing import Dict, Any
+from typing import Dict, Any, Optional
 
-# This Dictionary acts as our database.
-# Key: call_id (string)
-# Value: InterviewState (dict)
-ACTIVE_INTERVIEWS: Dict[str, Any] = {}
+# In-memory storage for demo purposes
+# In production, use Redis or a database
+interview_sessions: Dict[str, Any] = {}
 
-def get_interview_state(call_id: str) -> Dict:
-    """Retrieves state for a specific call, or None if new."""
-    return ACTIVE_INTERVIEWS.get(call_id)
+def get_interview_state(session_id: str) -> Optional[Dict[str, Any]]:
+    return interview_sessions.get(session_id)
 
-def save_interview_state(call_id: str, state: Dict):
-    """Updates the state for a specific call."""
-    ACTIVE_INTERVIEWS[call_id] = state
+def save_interview_state(session_id: str, state: Dict[str, Any]):
+    interview_sessions[session_id] = state
 
-def clear_interview_state(call_id: str):
-    """Removes state when interview ends."""
-    if call_id in ACTIVE_INTERVIEWS:
-        del ACTIVE_INTERVIEWS[call_id]
+def clear_interview_state(session_id: str):
+    if session_id in interview_sessions:
+        del interview_sessions[session_id]

@@ -9,51 +9,43 @@ app = FastAPI()
 
 @app.get("/")
 def home():
-    return {"status": "Stateful Agent Active"}
+    return {"status": "Eightfold AI Agent Active"}
 
 @app.post("/chat")
 async def chat_endpoint(request: Request):
     try:
         payload = await request.json()
         
-        # 1. GET CALL ID (The Session Key)
-        # Vapi sends 'call' object. We use 'id' as our unique key.
-        call_id = payload.get("call", {}).get("id")
+        # 1. GET CALL ID
+        call_id = payload.get("call", {}).get("id", "test_session_default")
         
-        # Fallback for testing tools that don't send call ID
-        if not call_id:
-            call_id = "test_session_default"
-
-        # 2. GET USER MESSAGE
+        # 2. GET USER MESSAGE (Handle various input formats)
         user_message = ""
-        # Check standard Vapi tool call
-        if isinstance(payload.get("message"), dict): # Nested
+        if isinstance(payload.get("message"), dict): 
              user_message = payload.get("message", {}).get("content", "")
-             # Or inside toolCall args if Vapi configured that way
              if not user_message:
                  user_message = payload.get("message", {}).get("toolCall", {}).get("function", {}).get("arguments", {}).get("message", "")
-        elif isinstance(payload.get("message"), str): # String
+        elif isinstance(payload.get("message"), str):
              try:
                  parsed = json.loads(payload["message"])
                  user_message = parsed.get("message", payload["message"])
              except:
                  user_message = payload["message"]
         
-        # Fallback to Vapi transcript history
         if not user_message and "messages" in payload:
             user_message = payload["messages"][-1]["content"]
             
         if not user_message: 
             user_message = "Start Interview"
 
-        # 3. RETRIEVE STATE FROM MEMORY (Stateful!)
+        # 3. RETRIEVE STATE
         current_state = get_interview_state(call_id)
 
         # 4. INITIALIZE IF NEW CALL
         if not current_state:
             print(f"New Call Detected: {call_id}")
             
-            # Detect Role
+            # Detect Role from first message
             role = "Software Engineer"
             if "sales" in user_message.lower(): role = "SDR"
             elif "retail" in user_message.lower(): role = "Retail Associate"
@@ -61,15 +53,15 @@ async def chat_endpoint(request: Request):
             current_state = {
                 "messages": [{"role": "user", "content": user_message}],
                 "role": role,
-                "question_count": 0, # Start at 0
+                "question_count": 0,
                 "persona_detected": "Normal",
                 "latest_evaluation": "Good",
                 "is_finished": False,
-                "feedback": None
+                "feedback": None,
+                "used_questions": [] # Initialize tracking list
             }
         else:
             print(f"Resuming Call {call_id} - Question Count: {current_state['question_count']}")
-            # Append new user message to existing history
             current_state["messages"].append({"role": "user", "content": user_message})
 
         # 5. RUN GRAPH
@@ -78,11 +70,10 @@ async def chat_endpoint(request: Request):
         # 6. EXTRACT RESPONSE
         bot_response = result["messages"][-1]["content"]
 
-        # 7. SAVE STATE BACK TO MEMORY
-        # We save the 'result' because it contains the updated question_count and messages
+        # 7. SAVE STATE
         if result.get("is_finished"):
-            clear_interview_state(call_id) # Cleanup memory
-            bot_response += " I've generated a PDF report."
+            clear_interview_state(call_id)
+            bot_response += " (Session Ended)"
         else:
             save_interview_state(call_id, result)
 
@@ -93,5 +84,5 @@ async def chat_endpoint(request: Request):
     except Exception as e:
         print(f"CRITICAL ERROR: {traceback.format_exc()}")
         return JSONResponse({
-            "results": [{"toolCallId": "error", "result": "I had a glitch. Let's continue."}]
+            "results": [{"toolCallId": "error", "result": "I encountered a technical glitch. Let's try that again."}]
         })
