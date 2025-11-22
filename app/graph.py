@@ -31,24 +31,29 @@ def analyze_input(state: InterviewState) -> InterviewState:
     user_input = state["messages"][-1]["content"]
 
     prompt = f"""
-You are analyzing the candidate's latest answer.
+You are analyzing the candidate's latest response in a mock interview.
 
-Recent conversation:
+If this is the first message or the user is choosing the role (e.g., 'software engineer'), return {{ "persona": "Normal", "evaluation": "Good" }}.
+
+Otherwise, based on recent conversation:
 {history}
 
 Latest user message: "{user_input}"
 
+Classify persona and evaluation.
+Persona: Confused (hesitant, nervous, 'um', 'I don't know'), Chatty (rambling, off-topic stories), Efficient (short/direct answers), Edge (invalid/rude/beyond scope), Normal.
+
+Evaluation: Good (answers well, relevant), Vague (needs more detail, follow-up), Off-topic (not related to question).
+
 Return ONLY valid JSON:
-{{
-  "persona": "Confused|Chatty|Efficient|Edge|Normal",
-  "evaluation": "Good|Vague|Off-topic"
-}}
+{{ "persona": "string", "evaluation": "string" }}
 """
     try:
         resp = llm.invoke([SystemMessage(content=prompt)])
         cleaned = resp.content.strip().replace("```json", "").replace("```", "")
         data = json.loads(cleaned)
-    except:
+    except Exception as e:
+        print("Analyze error:", str(e))
         data = {"persona": "Normal", "evaluation": "Good"}
 
     return {
@@ -74,10 +79,10 @@ def ask_new_question(state: InterviewState) -> InterviewState:
 # NODE 3: HANDLE SPECIAL
 def handle_special(state: InterviewState) -> InterviewState:
     last_q = next((m["content"] for m in reversed(state["messages"]) if m["role"] == "assistant"), "")
-    if state["latest_evaluation"] in ["Vague", "Off-topic"] or state["persona_detected"] == "Chatty":
-        prompt = f"Candidate is vague/off-topic/chatty. Last question was: '{last_q}'. Ask one focused follow-up or polite redirect."
+    if state["latest_evaluation"] in ["Vague", "Off-topic"] or state["persona_detected"] in ["Chatty", "Edge"]:
+        prompt = f"Candidate is {state['persona_detected']}/{state['latest_evaluation']}. Last question: '{last_q}'. Generate a warm, professional response: for Confused, simplify/reassure; for Chatty/Edge, redirect politely; for Vague, ask targeted follow-up."
     else:
-        prompt = "Gently guide the candidate back."
+        prompt = "Gently guide the candidate back to the interview."
 
     reply = llm.invoke([HumanMessage(content=prompt)]).content
     return {**state, "messages": state["messages"] + [{"role": "assistant", "content": reply}]}
@@ -86,12 +91,20 @@ def handle_special(state: InterviewState) -> InterviewState:
 def generate_feedback(state: InterviewState) -> InterviewState:
     transcript = "\n".join([f"{m['role']}: {m['content']}" for m in state["messages"]])
     prompt = f"""
-Interview over for {state['role']}.
+Mock interview complete for {state['role']}.
+
 Transcript:
 {transcript}
 
-Return JSON with closing statement only (spoken):
-"Overall you scored X/10. Strengths: ... Improvements: ..."
+Generate spoken feedback as a string:
+"Great job! Overall score: X/10.
+Strengths: - Bullet1 - Bullet2
+Areas for improvement: - Bullet1 - Bullet2
+Communication: ...
+Technical knowledge: ...
+Specific examples: ..."
+
+Keep it structured but natural for voice.
 """
     closing = llm.invoke([HumanMessage(content=prompt)]).content
     return {
@@ -100,9 +113,9 @@ Return JSON with closing statement only (spoken):
         "is_finished": True
     }
 
-# DECISION FUNCTION (FIXED - NO LAMBDA SYNTAX ERROR)
+# DECISION FUNCTION
 def decide_next(state: InterviewState):
-    if state["question_count"] >= random.randint(6, 9):
+    if state["question_count"] >= 6:  # Fixed to 6 for consistent demo
         return "generate_feedback"
     if state["latest_evaluation"] in ["Vague", "Off-topic"] or state["persona_detected"] in ["Chatty", "Edge"]:
         return "handle_special"
