@@ -9,7 +9,7 @@ import os
 from dotenv import load_dotenv
 
 load_dotenv()
-llm = ChatGoogleGenerativeAI(model="gemini-pro", temperature=0.6)  # FIXED: Changed to "gemini-pro" (standard for Gemini Pro)
+llm = ChatGoogleGenerativeAI(model="gemini-1.5-flash", temperature=0.6)
 
 class InterviewState(TypedDict):
     messages: List[Dict[str, str]]
