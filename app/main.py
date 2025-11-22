@@ -1,3 +1,4 @@
+# app/main.py
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 from app.graph import app_graph, InterviewState
@@ -19,8 +20,11 @@ async def webhook(request: Request):
         user_message = ""
         conversation = payload.get("conversation", [])
 
-        # From tool parameters (your log case)
-        tool_params = payload.get("message", {}).get("toolCall", {}).get("parameters", {})
+        # From tool parameters (fixed to check if 'message' is dict)
+        message = payload.get("message")
+        tool_params = {}
+        if isinstance(message, dict):
+            tool_params = message.get("toolCall", {}).get("parameters", {})
         if tool_params:
             user_message = tool_params.get("message", "")
 
@@ -33,7 +37,7 @@ async def webhook(request: Request):
         if not user_message:
             user_message = "software engineer"  # Fallback
 
-        # Build full messages list (FIXED SYNTAX - no index error)
+        # Build full messages list
         messages = []
         for msg in conversation:
             if msg.get("role") in ["user", "assistant"] and msg.get("content"):
@@ -65,7 +69,7 @@ async def webhook(request: Request):
         reply = result["messages"][-1]["content"]
 
         # Vapi format
-        tool_id = payload.get("message", {}).get("toolCall", {}).get("id", "1")
+        tool_id = payload.get("message", {}).get("toolCall", {}).get("id", "1") if isinstance(payload.get("message"), dict) else "1"
         return JSONResponse({
             "results": [{"toolCallId": tool_id, "result": reply}]
         })
