@@ -157,9 +157,6 @@ def handle_special(state: InterviewState) -> InterviewState:
     user_input = state["messages"][-1]["content"]
     persona = state["persona_detected"]
     
-    # In app/graph.py -> handle_special function
-
-    # ... inside the function ...
     sys_prompt = "You are an Interviewer. Be concise. Output ONLY the spoken response (1-2 sentences max)."
 
     if persona == "Confused":
@@ -171,6 +168,9 @@ def handle_special(state: InterviewState) -> InterviewState:
     else:
         # This handles the 'Off-topic' case where you talked about the dog initially
         task = f"Politely acknowledge the input, then immediately repeat the question: '{last_q}'."
+
+    reply = llm.invoke([SystemMessage(content=sys_prompt), HumanMessage(content=task)]).content.strip().replace('"','')
+    return {**state, "messages": state["messages"] + [{"role": "assistant", "content": reply}]}
 
 # --- NODE 4: FEEDBACK ---
 def generate_feedback(state: InterviewState) -> InterviewState:
