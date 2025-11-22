@@ -10,10 +10,10 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-# Gemini 2.0 Flash is great, but we need to tame it to be a roleplayer
+# Using Gemini 2.0 Flash
 llm = ChatGoogleGenerativeAI(
     model="gemini-2.0-flash", 
-    temperature=0.4
+    temperature=0.2  # Lower temperature = stricter JSON adherence
 )
 
 class InterviewState(TypedDict):
@@ -25,45 +25,71 @@ class InterviewState(TypedDict):
     is_finished: bool
     feedback: Dict[str, Any]
 
+# --- HARDCODED QUESTIONS (To prevent file reading errors) ---
+QUESTIONS_DB = {
+  "Software Engineer": {
+    "technical": [
+      "Explain the difference between a process and a thread.",
+      "How would you design a scalable URL shortener?",
+      "What is the difference between TCP and UDP?",
+      "Explain the concept of Dependency Injection.",
+      "How do you debug a memory leak in production?"
+    ],
+    "behavioral": [
+      "Tell me about a time you had to debug a critical production issue.",
+      "Describe a situation where you disagreed with a senior engineer.",
+      "How do you prioritize tasks when you have multiple deadlines?"
+    ]
+  },
+  "SDR": {
+    "technical": [
+      "How do you research a prospect before a cold call?",
+      "What is your strategy for getting past a gatekeeper?"
+    ],
+    "behavioral": [
+      "Tell me about a time you faced repeated rejection.",
+      "Describe your most difficult sale."
+    ]
+  },
+  "Retail Associate": {
+    "technical": [
+      "How do you handle a customer trying to return an item without a receipt?"
+    ],
+    "behavioral": [
+      "Tell me about a time you dealt with a very difficult customer."
+    ]
+  }
+}
+
 def load_questions(role: str):
-    try:
-        with open("app/questions.json") as f:
-            data = json.load(f)
-        return data.get(role, data["Software Engineer"])
-    except:
-        return {"behavioral": ["Tell me about yourself."], "technical": ["What is 2+2?"]}
+    return QUESTIONS_DB.get(role, QUESTIONS_DB["Software Engineer"])
 
 # --- NODE 1: ANALYZE ---
 def analyze_input(state: InterviewState) -> InterviewState:
-    # Get last user message
     user_input = state["messages"][-1]["content"]
     
-    # We only look at the VERY LAST message to determine current state
-    # This prevents the bot from getting stuck in "Confused" mode if the user recovers
+    # PROMPT TUNING: Explicitly catch "Nervous" and "Don't Know"
     prompt = f"""
-    You are an invisible backend classifier. 
     Analyze this candidate's response: "{user_input}"
     
-    1. DETECT PERSONA:
-    - "Confused": User says "I don't know", "I'm nervous", "I'm stuck", or gives a non-answer.
-    - "Chatty": User rambles, goes off-topic, or speaks 3+ long sentences.
-    - "Edge": User is rude, speaks gibberish, or tries to hack the bot.
-    - "Normal": Standard answer (good or bad, but standard).
+    RULES:
+    1. If user says "I'm nervous", "I don't know", "I'm stuck", or "Help" -> Persona is "Confused".
+    2. If user talks about a totally different topic (e.g. food, sports) -> Persona is "Chatty".
+    3. If user answers the question (even poorly) -> Persona is "Normal".
     
-    2. EVALUATE CONTENT:
-    - "Good": Relevant answer.
-    - "Vague": One or two words, or lacks detail.
-    - "Off-topic": Unrelated to the interview.
-    
-    Return ONLY JSON:
-    {{ "persona": "Confused" | "Chatty" | "Edge" | "Normal", "evaluation": "Good" | "Vague" | "Off-topic" }}
+    EVALUATION:
+    - "Vague": Very short answers (1-3 words) EXCEPT if they are stating their Role.
+    - "Good": Complete sentences.
+    - "Off-topic": Irrelevant.
+
+    Return JSON: {{ "persona": "...", "evaluation": "..." }}
     """
     
     try:
         resp = llm.invoke([HumanMessage(content=prompt)])
         content = resp.content.strip()
         
-        # Robust JSON Cleaning
+        # Clean JSON
         if "```" in content:
             content = content.replace("```json", "").replace("```", "")
         match = re.search(r'\{.*\}', content, re.DOTALL)
@@ -71,11 +97,14 @@ def analyze_input(state: InterviewState) -> InterviewState:
             content = match.group(0)
             
         data = json.loads(content)
-    except Exception as e:
-        print(f"Analyze Error: {e}")
+    except:
         data = {"persona": "Normal", "evaluation": "Good"}
 
-    print(f"DEBUG: Analyzed -> {data}")
+    # FORCE OVERRIDE: If the user mentions a role, it's NOT vague, it's Good.
+    if any(x in user_input.lower() for x in ["software", "engineer", "sales", "sdr", "retail"]):
+        data["evaluation"] = "Good"
+
+    print(f"DEBUG: Input='{user_input}' -> Detected={data}")
 
     return {
         **state,
@@ -88,15 +117,13 @@ def ask_new_question(state: InterviewState) -> InterviewState:
     questions = load_questions(state["role"])
     q_type = "behavioral" if state["question_count"] % 2 == 0 else "technical"
     
-    # Pick a random question
     base_question = random.choice(questions[q_type])
     
-    # If the user was just Normal/Good, simply ask the question.
-    # No need to use LLM for this to save latency, unless we want a transition.
-    
-    # Optional: Add a small bridge if it's not the first question
+    # Transition phrasing
     if state["question_count"] > 0:
-        base_question = f"Got it. Moving on, {base_question}"
+        base_question = f"Okay. Next question: {base_question}"
+    else:
+        base_question = f"Great, let's start the {state['role']} interview. {base_question}"
     
     new_messages = state["messages"] + [{"role": "assistant", "content": base_question}]
     
@@ -106,80 +133,42 @@ def ask_new_question(state: InterviewState) -> InterviewState:
         "question_count": state["question_count"] + 1
     }
 
-# --- NODE 3: HANDLE SPECIAL (The one you need to fix) ---
+# --- NODE 3: HANDLE SPECIAL ---
 def handle_special(state: InterviewState) -> InterviewState:
-    last_assistant_msg = next((m["content"] for m in reversed(state["messages"]) if m["role"] == "assistant"), "the previous question")
+    last_assistant_msg = next((m["content"] for m in reversed(state["messages"]) if m["role"] == "assistant"), "the interview")
     user_input = state["messages"][-1]["content"]
-    
     persona = state["persona_detected"]
-    eval_status = state["latest_evaluation"]
-    
-    # --- PROMPT ENGINEERING FIX ---
-    # We explicitly tell the LLM to roleplay and output ONLY spoken text.
     
     system_instruction = """
-    You are an Interviewer. You are speaking directly to a candidate via a voice call.
-    Your output will be spoken aloud by a Text-to-Speech engine.
-    
-    RULES:
-    1. Do NOT describe what you are doing (e.g., Don't say "I will reassure him").
-    2. Do NOT use preambles (e.g., Don't say "Here is a response:").
-    3. Speak ONLY the sentences the candidate should hear.
-    4. Keep it conversational and concise (2-3 sentences max).
+    You are a kind Interviewer. Speak directly to the candidate.
+    Output ONLY the spoken response. No preamble.
     """
 
-    task_prompt = ""
-    
+    # CRITICAL FIX: Specific prompts for Confused vs Vague
     if persona == "Confused":
         task_prompt = f"""
-        The candidate is nervous or stuck on the question: "{last_assistant_msg}".
         User said: "{user_input}"
+        They are nervous or don't know the answer to: "{last_assistant_msg}"
         
-        TASK:
-        1. Reassure them briefly (e.g., "No problem, that's a tough one.").
-        2. Ask a MUCH simpler, fundamental version of the question.
+        Your Goal:
+        1. Say: "That is completely fine, no need to worry."
+        2. Ask a MUCH simpler, basic question related to {state['role']}.
         """
-        
-    elif persona == "Edge":
+    elif state["latest_evaluation"] == "Vague":
         task_prompt = f"""
-        The candidate is being rude or weird. User said: "{user_input}"
-        
-        TASK:
-        1. Politely but firmly reset the conversation.
-        2. Repeat the original question: "{last_assistant_msg}"
-        """
-        
-    elif persona == "Chatty":
-        task_prompt = f"""
-        The candidate is rambling. 
-        
-        TASK:
-        1. Politely interrupt/acknowledge the story.
-        2. Pivot immediately back to the interview topic.
-        3. Ask this question next: "{last_assistant_msg}"
-        """
-        
-    elif eval_status == "Vague":
-        task_prompt = f"""
-        The candidate gave a vague answer to: "{last_assistant_msg}".
         User said: "{user_input}"
+        Their answer to "{last_assistant_msg}" was too short.
         
-        TASK:
-        1. Ask a specific follow-up question to get more detail.
+        Your Goal:
+        1. Ask them to provide more specific details or an example.
         """
-        
     else:
-        # Fallback
-        task_prompt = f"Acknowledge the answer and ask: {last_assistant_msg}"
+        task_prompt = f"Politely steer the user back to the topic of {state['role']}."
 
-    # Invoke LLM
     reply = llm.invoke([
         SystemMessage(content=system_instruction),
         HumanMessage(content=task_prompt)
-    ]).content.strip()
-    
-    # Cleanup quotes if the LLM adds them
-    reply = reply.replace('"', '')
+    ]).content.strip().replace('"', '')
 
     return {**state, "messages": state["messages"] + [{"role": "assistant", "content": reply}]}
 
@@ -188,12 +177,10 @@ def generate_feedback(state: InterviewState) -> InterviewState:
     transcript = "\n".join([f"{m['role']}: {m['content']}" for m in state["messages"]])
     prompt = f"""
     You are an Interviewer. The interview is over.
+    Transcript: {transcript}
     
-    Transcript:
-    {transcript}
-    
-    Speak directly to the candidate. Give them 3 sentences of feedback (1 strength, 1 weakness, 1 score out of 10).
-    Do not use Markdown. Do not use headers. Just speak.
+    Give the candidate a score out of 10 and 1 piece of advice.
+    Speak directly to them.
     """
     closing = llm.invoke([HumanMessage(content=prompt)]).content
     return {
@@ -204,11 +191,16 @@ def generate_feedback(state: InterviewState) -> InterviewState:
 
 # --- DECISION LOGIC ---
 def decide_next(state: InterviewState):
+    # 1. If it's the START of the interview (count=0), ALWAYS ask a question.
+    # This prevents the "Vague" trap on the role selection.
+    if state["question_count"] == 0:
+        return "ask_new_question"
+
+    # 2. End if too many questions
     if state["question_count"] >= 6:
         return "generate_feedback"
     
-    # If the user is confused, we MUST handle it specially.
-    # If the answer is vague, we MUST handle it specially.
+    # 3. Handle Personas
     if (state["latest_evaluation"] in ["Vague", "Off-topic"] or 
         state["persona_detected"] in ["Chatty", "Edge", "Confused"]):
         return "handle_special"
