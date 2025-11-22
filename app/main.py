@@ -11,65 +11,77 @@ app = FastAPI()
 def read_root():
     return {"status": "Interview Agent Active"}
 
+# app/main.py  (only this function changes)
+
 @app.post("/chat")
 async def chat_endpoint(request: Request):
     data = await request.json()
 
-    # 1. EXTRACT USER MESSAGE (Robust Fix)
-    user_message = ""
-    if isinstance(data.get("message"), str):
-        user_message = data["message"]
-    elif isinstance(data.get("message"), dict):
-        user_message = data["message"].get("content", "")
-    elif "messages" in data:
-        user_message = data["messages"][-1]["content"]
+    # Vapi always sends the full conversation history
+    conversation = data.get("conversation", [])
+    
+    # Find the latest user message
+    user_messages = [m for m in conversation if m["role"] == "user"]
+    if not user_messages:
+        user_input = "Start interview"
+    else:
+        user_input = user_messages[-1]["content"]
 
-    if not user_message:
-        user_message = "Start Interview"
-
-    # 2. DETECT ROLE
-    role = "Software Engineer"
-    if "sales" in user_message.lower() or "sdr" in user_message.lower():
+    # Extract role from the very first user message
+    all_user_text = " ".join([m["content"] for m in user_messages]).lower()
+    if any(x in all_user_text for x in ["sdr", "sales"]):
         role = "SDR"
-    elif "retail" in user_message.lower():
+    elif "retail" in all_user_text:
         role = "Retail Associate"
+    else:
+        role = "Software Engineer"
 
-    # 3. SETUP STATE
-    # Note: question_count resets to 0 here because we are stateless.
-    # To fix "Confused" detection, we removed the length check in graph.py
-    initial_state = {
-        "messages": [{"role": "user", "content": user_message}],
+    # Reconstruct full message history in LangGraph format
+    messages = []
+    for msg in conversation:
+        if msg["role"] == "user":
+            messages.append({"role": "user", "content": msg["content"]})
+        elif msg["role"] == "assistant" and msg["content"]:
+            messages.append({"role": "assistant", "content": msg["content"]})
+
+    # Count how many real questions the assistant has already asked
+    assistant_questions = [m for m in messages if m["role"] == "assistant" and ("?" in m["content"] or m["content"].startswith(("Tell me", "Describe", "Explain", "Walk me")))]
+    question_count = len(assistant_questions)
+
+    # Build proper persistent state
+    initial_state: InterviewState = {
+        "messages": messages + [{"role": "user", "content": user_input}],  # add latest
         "role": role,
-        "question_count": 0,
-        "current_question_type": "behavioral",
+        "question_count": question_count,
+        "current_question_type": "behavioral",  # will be overridden by logic inside nodes
         "persona_detected": "Normal",
         "latest_evaluation": "Good",
         "is_finished": False,
         "feedback": None
     }
 
-    # 4. RUN INTELLIGENCE
+    # Run the graph with full history
     result = app_graph.invoke(initial_state)
-    bot_response = result["messages"][-1].content
 
-    # 5. GENERATE PDF IF DONE
+    # Extract the assistant's reply
+    bot_reply = result["messages"][-1]["content"]
+
+    # If interview finished → generate PDF (optional)
     if result.get("is_finished") and result.get("feedback"):
-        feedback_data = result["feedback"]
-        # In production, upload this to S3. Here we just create it locally.
         try:
-            create_pdf(feedback_data)
-            bot_response += " I have also generated a PDF feedback report for you."
+            create_pdf(result["feedback"])
+            bot_reply += "\n\nI’ve also created a detailed PDF feedback report for you!"
         except Exception as e:
-            print(f"PDF Error: {e}")
+            print("PDF error:", e)
 
+    # Vapi expects this exact format
     return {
         "results": [
             {
-                "toolCallId": data.get("toolCallId", "unknown"),
-                "result": bot_response
+                "toolCallId": data.get("message", {}).get("toolCall", {}).get("id", "no-id"),
+                "result": bot_reply
             }
-        ],
-        "text": bot_response
+        ]
     }
 
 def create_pdf(feedback_data):
