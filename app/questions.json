@@ -1,0 +1,39 @@
+{
+  "Software Engineer": {
+    "technical": [
+      "Explain the difference between a process and a thread.",
+      "How would you design a scalable URL shortener?",
+      "What is the difference between TCP and UDP?",
+      "Explain the concept of Dependency Injection."
+    ],
+    "behavioral": [
+      "Tell me about a time you had to debug a critical production issue.",
+      "Describe a situation where you disagreed with a senior engineer.",
+      "How do you prioritize tasks when you have multiple deadlines?"
+    ]
+  },
+  "SDR": {
+    "technical": [
+      "How do you research a prospect before a cold call?",
+      "What is your strategy for getting past a gatekeeper?",
+      "Draft a quick voicemail script for a warm lead."
+    ],
+    "behavioral": [
+      "Tell me about a time you faced repeated rejection. How did you handle it?",
+      "Describe your most difficult sale and how you closed it.",
+      "How do you stay motivated on a slow sales day?"
+    ]
+  },
+  "Retail Associate": {
+    "technical": [
+      "How do you handle a customer trying to return an item without a receipt?",
+      "Explain how you would organize a messy display during a rush.",
+      "How do you process a credit card transaction manually if the system is down?"
+    ],
+    "behavioral": [
+      "Tell me about a time you dealt with an angry customer.",
+      "Describe a time you went above and beyond for a shopper.",
+      "How do you handle a conflict with a coworker on the sales floor?"
+    ]
+  }
+}
