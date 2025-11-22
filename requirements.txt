@@ -1,7 +1,5 @@
 fastapi
 uvicorn
+langchain-google-genai
 langgraph
-langchain-google-genai  
 python-dotenv
-pydantic
-reportlab

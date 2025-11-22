@@ -7,17 +7,20 @@ import json
 
 app = FastAPI()
 
+@app.get("/")
+def home():
+    return {"status": "Eightfold AI Agent Active [Robust Mode]"}
+
 @app.post("/chat")
 async def chat_endpoint(request: Request):
     try:
         payload = await request.json()
         
-        # 1. ROBUST ID EXTRACTION
-        # If no ID is provided, we generate one based on IP or default, 
-        # but for this assignment, we fallback to "demo_user" if the tool fails.
-        call_id = payload.get("call", {}).get("id", "production_demo_session")
+        # 1. GET CALL ID
+        # Use 'id' from call object, or fallback to a test session if testing via Postman/Curl
+        call_id = payload.get("call", {}).get("id", "demo_session_v1")
         
-        # 2. MESSAGE EXTRACTION
+        # 2. EXTRACT MESSAGE
         user_message = ""
         if isinstance(payload.get("message"), dict): 
              user_message = payload.get("message", {}).get("content", "")
@@ -34,11 +37,12 @@ async def chat_endpoint(request: Request):
         if not user_message: 
             user_message = "Start Interview"
 
-        # 3. RETRIEVE STATE (From SQLite)
+        # 3. RETRIEVE STATE
         current_state = get_interview_state(call_id)
 
+        # 4. INITIALIZE IF NEW
         if not current_state:
-            print(f"Starting NEW Session: {call_id}")
+            print(f"🔵 New Session: {call_id}")
             role = "Software Engineer"
             if "sales" in user_message.lower(): role = "SDR"
             elif "retail" in user_message.lower(): role = "Retail Associate"
@@ -52,19 +56,20 @@ async def chat_endpoint(request: Request):
                 "is_finished": False,
                 "feedback": None,
                 "used_questions": [],
-                "active_question": "" # Initialize Anchor
+                "active_question": "" 
             }
         else:
-            print(f"Resuming Session {call_id} | Question: {current_state['question_count']}")
+            print(f"🟢 Resuming Session {call_id} | Q: {current_state['question_count']}")
             current_state["messages"].append({"role": "user", "content": user_message})
 
-        # 4. EXECUTE
+        # 5. EXECUTE GRAPH
         result = app_graph.invoke(current_state)
         bot_response = result["messages"][-1]["content"]
 
-        # 5. SAVE/CLEANUP
+        # 6. SAVE STATE
         if result.get("is_finished"):
             clear_interview_state(call_id)
+            bot_response += " (Session Ended)"
         else:
             save_interview_state(call_id, result)
 
@@ -73,8 +78,7 @@ async def chat_endpoint(request: Request):
         })
 
     except Exception as e:
-        print(f"ERROR: {traceback.format_exc()}")
+        print(f"🔴 ERROR: {traceback.format_exc()}")
         return JSONResponse({
-            "results": [{"toolCallId": "error", "result": "System error. Please retry."}]
+            "results": [{"toolCallId": "error", "result": "I encountered a technical glitch. Please say that again."}]
         })
-# End of file main.py
