@@ -1,4 +1,3 @@
-# app/graph.py
 import json
 import random
 from typing import TypedDict, List, Dict, Any
@@ -26,7 +25,7 @@ def load_questions(role: str):
         data = json.load(f)
     return data.get(role, data["Software Engineer"])
 
-# ——— NODE 1: ANALYZE ———
+# NODE 1: ANALYZE
 def analyze_input(state: InterviewState) -> InterviewState:
     history = "\n".join([f"{m['role'].capitalize()}: {m['content']}" for m in state["messages"][-10:]])
     user_input = state["messages"][-1]["content"]
@@ -52,14 +51,13 @@ Return ONLY valid JSON:
     except:
         data = {"persona": "Normal", "evaluation": "Good"}
 
-    # IMPORTANT: return FULL state, not just partial
     return {
         **state,
         "persona_detected": data["persona"],
         "latest_evaluation": data["evaluation"]
     }
 
-# ——— NODE 2: ASK NEW QUESTION ———
+# NODE 2: ASK NEW QUESTION
 def ask_new_question(state: InterviewState) -> InterviewState:
     questions = load_questions(state["role"])
     q_type = "behavioral" if state["question_count"] % 2 == 0 else "technical"
@@ -73,7 +71,7 @@ def ask_new_question(state: InterviewState) -> InterviewState:
     new_messages = state["messages"] + [{"role": "assistant", "content": question}]
     return {**state, "messages": new_messages, "question_count": state["question_count"] + 1}
 
-# ——— NODE 3: FOLLOW-UP / REDIRECT ———
+# NODE 3: HANDLE SPECIAL
 def handle_special(state: InterviewState) -> InterviewState:
     last_q = next((m["content"] for m in reversed(state["messages"]) if m["role"] == "assistant"), "")
     if state["latest_evaluation"] in ["Vague", "Off-topic"] or state["persona_detected"] == "Chatty":
@@ -84,7 +82,7 @@ def handle_special(state: InterviewState) -> InterviewState:
     reply = llm.invoke([HumanMessage(content=prompt)]).content
     return {**state, "messages": state["messages"] + [{"role": "assistant", "content": reply}]}
 
-# ——— NODE 4: END & FEEDBACK ———
+# NODE 4: FEEDBACK
 def generate_feedback(state: InterviewState) -> InterviewState:
     transcript = "\n".join([f"{m['role']}: {m['content']}" for m in state["messages"]])
     prompt = f"""
@@ -102,7 +100,15 @@ Return JSON with closing statement only (spoken):
         "is_finished": True
     }
 
-# ——— GRAPH ———
+# DECISION FUNCTION (FIXED - NO LAMBDA SYNTAX ERROR)
+def decide_next(state: InterviewState):
+    if state["question_count"] >= random.randint(6, 9):
+        return "generate_feedback"
+    if state["latest_evaluation"] in ["Vague", "Off-topic"] or state["persona_detected"] in ["Chatty", "Edge"]:
+        return "handle_special"
+    return "ask_new_question"
+
+# GRAPH
 workflow = StateGraph(InterviewState)
 
 workflow.add_node("analyze", analyze_input)
@@ -114,9 +120,7 @@ workflow.set_entry_point("analyze")
 
 workflow.add_conditional_edges(
     "analyze",
-    lambda s: "generate_feedback" if s["question_count"] >= random.randint(6,9) else
-              "handle_special" if s["latest_evaluation"] in ["Vague","Off-topic"] or s["Chatty","Edge"].count(s["persona_detected"]) else
-              "ask_new_question",
+    decide_next,
     {
         "ask_new_question": "ask_new_question",
         "handle_special": "handle_special",
