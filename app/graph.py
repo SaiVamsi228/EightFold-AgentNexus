@@ -12,7 +12,7 @@ load_dotenv()
 
 # Using Gemini 2.0 Flash
 llm = ChatGoogleGenerativeAI(
-    model="gemini-2.0-flash", 
+    model="gemini-2.5-flash-lite", 
     temperature=0.2  # Lower temperature = stricter JSON adherence
 )
 
