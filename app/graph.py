@@ -89,6 +89,33 @@ def ask_question(state: InterviewState):
     # Alternate types
     new_type = "technical" if state["current_question_type"] == "behavioral" else "behavioral"
     
+    # Pick random question
+    raw_question = random.choice(role_data[new_type])
+    
+    # DYNAMIC REPHRASING based on Persona
+    if state["persona_detected"] == "Confused":
+        prompt = f"Rewrite this interview question to be simpler and more encouraging for a nervous candidate: '{raw_question}'"
+        final_q = llm.invoke([HumanMessage(content=prompt)]).content
+    elif state["persona_detected"] == "Efficient":
+        # Direct, no fluff
+        final_q = raw_question
+    elif state["persona_detected"] == "Chatty":
+        prompt = f"Create a transition that politely cuts off a rambling candidate and pivots to this question: '{raw_question}'"
+        final_q = llm.invoke([HumanMessage(content=prompt)]).content
+    else:
+        # Normal - add a bit of professional conversational filler
+        final_q = raw_question
+
+    return {
+        "messages": [AIMessage(content=final_q)],
+        "question_count": state["question_count"] + 1,
+        "current_question_type": new_type
+    }
+    role_data = load_questions(state["role"])
+    
+    # Alternate types
+    new_type = "technical" if state["current_question_type"] == "behavioral" else "behavioral"
+    
     # Pick random question from list
     question_text = random.choice(role_data[new_type])
     
