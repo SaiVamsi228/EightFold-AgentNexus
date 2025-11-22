@@ -22,7 +22,7 @@ class InterviewState(TypedDict):
     feedback: Dict[str, Any]
     used_questions: List[str]
     active_question: str
-    retry_count: int  # NEW: Track how many times we've tried the SAME question
+    retry_count: int
 
 # --- QUESTION BANK ---
 QUESTIONS_DB = {
@@ -69,19 +69,15 @@ QUESTIONS_DB = {
 }
 
 def load_questions(role: str):
-    # Fallback to Software Engineer if role is invalid
     return QUESTIONS_DB.get(role, QUESTIONS_DB["Software Engineer"])
 
-# --- NODE 1: ANALYZE (IMPROVED CLASSIFICATION) ---
+# --- NODE 1: ANALYZE (UPDATED FOR "NO EXPERIENCE") ---
 def analyze_input(state: InterviewState) -> InterviewState:
     user_input = state["messages"][-1]["content"]
-    
-    # 1. CHECK FOR ROLE ATTEMPT (If user tries to switch, we must catch it)
-    # Note: We won't switch, but we need to know they tried so we can block it.
-    
     current_context = state.get("active_question")
     if not current_context: current_context = "Introduction"
 
+    # LOGIC UPDATE: Added "NoExperience" detection
     prompt = f"""
     You are an Interview Analyst.
     
@@ -92,13 +88,14 @@ def analyze_input(state: InterviewState) -> InterviewState:
     Analyze the input.
     
     1. PERSONA DETECTION:
-    - "Distracted": User mentions external noise, dogs, internet lag, "can't hear", "wait a sec".
-    - "Confused": User says "I don't know", "Explain please", "What does that mean?".
-    - "Resisting": User tries to change the role (e.g., "I want retail instead"), or refuses to answer.
+    - "NoExperience": User says "I don't know", "I haven't done this", "Never saw one", or "I'm not sure".
+    - "Distracted": User mentions external noise, dogs, internet lag.
+    - "Resisting": User tries to change the role (e.g., "I want retail instead").
+    - "Confused": User asks for clarification ("What does that mean?").
     - "Normal": Attempts to answer.
 
     2. EVALUATION:
-    - "Vague": Too short/generic.
+    - "Vague": Too short/generic (but they claimed they knew it).
     - "Good": Relevant answer.
     - "Off-topic": Completely unrelated.
 
@@ -122,7 +119,7 @@ def analyze_input(state: InterviewState) -> InterviewState:
         "latest_evaluation": data.get("evaluation", "Good")
     }
 
-# --- NODE 2: ASK NEW QUESTION ---
+# --- NODE 2: ASK NEW QUESTION (UPDATED TRANSITIONS) ---
 def ask_new_question(state: InterviewState) -> InterviewState:
     questions = load_questions(state["role"])
     q_type = "behavioral" if state["question_count"] % 2 == 0 else "technical"
@@ -134,16 +131,20 @@ def ask_new_question(state: InterviewState) -> InterviewState:
 
     base_question = random.choice(available)
     
-    # Transition Logic
+    # LOGIC UPDATE: Handle "NoExperience" transition gracefully
     if state["question_count"] == 0:
         final_q = f"Great. Let's start the {state['role']} interview. {base_question}"
+        
+    elif state["persona_detected"] == "NoExperience":
+        final_q = f"That's completely fair, not everyone has encountered that specific situation. Let's move on to a different topic. {base_question}"
+        
     elif state["latest_evaluation"] == "Good":
         transition_prompt = f"User gave a good answer to '{state.get('active_question')}'. Generate a 3-word positive acknowledgement."
         transition = llm.invoke([HumanMessage(content=transition_prompt)]).content.strip().replace('"','')
         final_q = f"{transition}. {base_question}"
+        
     else:
-        # If we are forced to move on despite a bad answer (Loop breaking)
-        final_q = f"Okay, let's move on to a different topic. {base_question}"
+        final_q = f"Okay, let's move on. {base_question}"
     
     return {
         **state, 
@@ -151,10 +152,10 @@ def ask_new_question(state: InterviewState) -> InterviewState:
         "question_count": state["question_count"] + 1,
         "used_questions": used + [base_question],
         "active_question": base_question,
-        "retry_count": 0 # Reset retry count for new question
+        "retry_count": 0
     }
 
-# --- NODE 3: HANDLE SPECIAL (FIXED LOGIC) ---
+# --- NODE 3: HANDLE SPECIAL ---
 def handle_special(state: InterviewState) -> InterviewState:
     target_topic = state.get("active_question", "the interview")
     user_input = state["messages"][-1]["content"]
@@ -163,17 +164,13 @@ def handle_special(state: InterviewState) -> InterviewState:
     
     sys_prompt = "You are an Interviewer. Be professional."
     
-    # LOGIC: How to handle specific issues
     if persona == "Resisting":
-        # User tried to switch roles. BLOCK IT.
-        task = f"User wants to switch roles or is refusing. Politely state: 'I am currently set up to conduct the {role} interview. Let's continue with that.' Then repeat: '{target_topic}'."
+        task = f"User wants to switch roles. Politely state: 'I am currently set up to conduct the {role} interview. Let's continue with that.' Then repeat: '{target_topic}'."
     
     elif persona == "Distracted":
-        # FIX: Do NOT simplify. Just wait.
-        task = f"User is distracted (e.g. dog barking, noise). Say something empathetic like 'No problem, I can wait.' Then gently repeat the EXACT SAME question: '{target_topic}'."
+        task = f"User is distracted (noise/internet). Say: 'No problem, I can wait.' Then gently repeat: '{target_topic}'."
     
     elif persona == "Confused":
-        # FIX: Simplify, but don't loop forever.
         task = f"User doesn't understand: '{target_topic}'. Explain the concept simply and ask them to try again."
         
     elif state["latest_evaluation"] == "Vague":
@@ -197,13 +194,16 @@ def generate_feedback(state: InterviewState) -> InterviewState:
     closing = llm.invoke([HumanMessage(content=prompt)]).content
     return {**state, "messages": state["messages"] + [{"role": "assistant", "content": closing}], "is_finished": True}
 
-# --- ROUTING LOGIC ---
+# --- ROUTING LOGIC (CRITICAL UPDATE) ---
 def decide_next(state: InterviewState):
     if state["question_count"] == 0: return "ask_new_question"
     if state["question_count"] >= 5: return "generate_feedback"
     
-    # LOOP BREAKER: If we have retried the SAME question 2 times, give up and move on
     if state.get("retry_count", 0) >= 2:
+        return "ask_new_question"
+
+    # LOGIC FIX: If user has No Experience, DO NOT dig deeper. Move to new question.
+    if state["persona_detected"] == "NoExperience":
         return "ask_new_question"
 
     if state["latest_evaluation"] == "Good" or (state["persona_detected"] == "Efficient" and state["latest_evaluation"] != "Off-topic"):
