@@ -1,7 +1,7 @@
 fastapi
 uvicorn
 langgraph
-langchain-openai
+langchain-google-genai  
 python-dotenv
 pydantic
 reportlab

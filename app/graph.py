@@ -2,13 +2,13 @@ import json
 import random
 from typing import TypedDict, List, Dict, Any
 from langgraph.graph import StateGraph, END
-from langchain_openai import ChatOpenAI
+from langchain_google_genai import ChatGoogleGenerativeAI  # Switched from langchain_openai
 from langchain_core.messages import HumanMessage, SystemMessage
 import os
 from dotenv import load_dotenv
 
 load_dotenv()
-llm = ChatOpenAI(model="gpt-4o-mini", temperature=0.6)
+llm = ChatGoogleGenerativeAI(model="gemini-1.5-pro-latest", temperature=0.6)
 
 class InterviewState(TypedDict):
     messages: List[Dict[str, str]]
