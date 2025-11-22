@@ -1,6 +1,6 @@
-# app/graph.py (Updated model to "gemini-pro" to fix 404 error)
 import json
 import random
+import re # Added regex for better JSON cleaning
 from typing import TypedDict, List, Dict, Any
 from langgraph.graph import StateGraph, END
 from langchain_google_genai import ChatGoogleGenerativeAI
@@ -9,9 +9,11 @@ import os
 from dotenv import load_dotenv
 
 load_dotenv()
+
+# Use the stable model alias
 llm = ChatGoogleGenerativeAI(
-    model="gemini-2.0-flash",
-    temperature=0.6
+    model="gemini-1.5-flash", 
+    temperature=0.4 # Lower temp for better JSON consistency
 )
 
 class InterviewState(TypedDict):
@@ -23,93 +25,119 @@ class InterviewState(TypedDict):
     is_finished: bool
     feedback: Dict[str, Any]
 
-# Load questions
 def load_questions(role: str):
-    with open("app/questions.json") as f:
-        data = json.load(f)
-    return data.get(role, data["Software Engineer"])
+    try:
+        with open("app/questions.json") as f:
+            data = json.load(f)
+        return data.get(role, data["Software Engineer"])
+    except:
+        return {"behavioral": ["Tell me about yourself."], "technical": ["What is 2+2?"]}
 
-# NODE 1: ANALYZE (Already fixed with HumanMessage)
+# --- NODE 1: ANALYZE ---
 def analyze_input(state: InterviewState) -> InterviewState:
-    history = "\n".join([f"{m['role'].capitalize()}: {m['content']}" for m in state["messages"][-10:]])
+    # Get last few messages for context
+    history = "\n".join([f"{m['role'].capitalize()}: {m['content']}" for m in state["messages"][-4:]])
     user_input = state["messages"][-1]["content"]
 
     prompt = f"""
-You are analyzing the candidate's latest response in a mock interview.
-
-If this is the first message or the user is choosing the role (e.g., 'software engineer'), return {{ "persona": "Normal", "evaluation": "Good" }}.
-
-Otherwise, based on recent conversation:
-{history}
-
-Latest user message: "{user_input}"
-
-Classify persona and evaluation.
-Persona: Confused (hesitant, nervous, 'um', 'I don't know'), Chatty (rambling, off-topic stories), Efficient (short/direct answers), Edge (invalid/rude/beyond scope), Normal.
-
-Evaluation: Good (answers well, relevant), Vague (needs more detail, follow-up), Off-topic (not related to question).
-
-Return ONLY valid JSON:
-{{ "persona": "string", "evaluation": "string" }}
-"""
+    You are an invisible observer of an interview. Analyze the candidate's latest response.
+    
+    Context:
+    {history}
+    
+    Latest Candidate Response: "{user_input}"
+    
+    1. DETECT PERSONA:
+    - "Confused": User says "I don't know", "I'm nervous", asks for help, or gives very short/weak answers indicating struggle.
+    - "Chatty": User writes 3+ sentences that ramble or go off-topic.
+    - "Edge": User is rude, names unrelated things (e.g., "Jim"), or speaks nonsense.
+    - "Normal": Standard professional answer.
+    
+    2. EVALUATE CONTENT:
+    - "Good": Relevant answer.
+    - "Vague": One or two word answers, or "I guess".
+    - "Off-topic": Completely unrelated.
+    
+    Return ONLY valid JSON:
+    {{ "persona": "Confused" | "Chatty" | "Edge" | "Normal", "evaluation": "Good" | "Vague" | "Off-topic" }}
+    """
+    
     try:
-        resp = llm.invoke([SystemMessage(content=prompt), HumanMessage(content=user_input)])
-        cleaned = resp.content.strip().replace("```json", "").replace("```", "")
-        data = json.loads(cleaned)
+        resp = llm.invoke([HumanMessage(content=prompt)])
+        content = resp.content.strip()
+        
+        # --- FIX: ROBUST JSON CLEANING ---
+        # Remove markdown code blocks if present
+        if "```" in content:
+            content = content.replace("```json", "").replace("```", "")
+        
+        # Use regex to find the first { and last }
+        match = re.search(r'\{.*\}', content, re.DOTALL)
+        if match:
+            content = match.group(0)
+            
+        data = json.loads(content)
     except Exception as e:
-        print("Analyze error:", str(e))
+        print(f"Analyze Error: {e} | Raw output: {content if 'content' in locals() else 'None'}")
+        # Fallback
         data = {"persona": "Normal", "evaluation": "Good"}
+
+    print(f"DEBUG: Detected {data['persona']} / {data['evaluation']}")
 
     return {
         **state,
-        "persona_detected": data["persona"],
-        "latest_evaluation": data["evaluation"]
+        "persona_detected": data.get("persona", "Normal"),
+        "latest_evaluation": data.get("evaluation", "Good")
     }
 
-# NODE 2: ASK NEW QUESTION
+# --- NODE 2: ASK NEW QUESTION ---
 def ask_new_question(state: InterviewState) -> InterviewState:
     questions = load_questions(state["role"])
+    # Simple logic: alternate tech/behavioral
     q_type = "behavioral" if state["question_count"] % 2 == 0 else "technical"
-    question = random.choice(questions[q_type])
+    
+    # Pick a random question
+    base_question = random.choice(questions[q_type])
+    
+    # Add to history
+    new_messages = state["messages"] + [{"role": "assistant", "content": base_question}]
+    
+    return {
+        **state, 
+        "messages": new_messages, 
+        "question_count": state["question_count"] + 1
+    }
 
-    if state["persona_detected"] == "Confused":
-        question = llm.invoke([HumanMessage(content=f"Make this question much simpler and reassuring: {question}")]).content
-    elif state["persona_detected"] == "Chatty":
-        question = llm.invoke([HumanMessage(content=f"Politely refocus the candidate on this exact question: {question}")]).content
-
-    new_messages = state["messages"] + [{"role": "assistant", "content": question}]
-    return {**state, "messages": new_messages, "question_count": state["question_count"] + 1}
-
-# NODE 3: HANDLE SPECIAL
+# --- NODE 3: HANDLE SPECIAL ---
 def handle_special(state: InterviewState) -> InterviewState:
-    last_q = next((m["content"] for m in reversed(state["messages"]) if m["role"] == "assistant"), "")
-    if state["latest_evaluation"] in ["Vague", "Off-topic"] or state["persona_detected"] in ["Chatty", "Edge"]:
-        prompt = f"Candidate is {state['persona_detected']}/{state['latest_evaluation']}. Last question: '{last_q}'. Generate a warm, professional response: for Confused, simplify/reassure; for Chatty/Edge, redirect politely; for Vague, ask targeted follow-up."
+    last_assistant_msg = next((m["content"] for m in reversed(state["messages"]) if m["role"] == "assistant"), "the previous question")
+    
+    persona = state["persona_detected"]
+    eval_status = state["latest_evaluation"]
+    
+    prompt = ""
+    if persona == "Confused":
+        prompt = f"The candidate said they are nervous or stuck on '{last_assistant_msg}'. Be empathetic. Say something reassuring like 'It's okay to take a moment.' Then, ask a much simpler version of the question."
+    elif persona == "Edge":
+        prompt = f"The candidate said something weird/rude: '{state['messages'][-1]['content']}'. Politely but firmly bring them back to the topic of '{state['role']}' interview."
+    elif eval_status == "Vague":
+        prompt = f"The candidate gave a vague answer to '{last_assistant_msg}'. Ask a specific follow-up question to get more details."
     else:
-        prompt = "Gently guide the candidate back to the interview."
+        prompt = f"Acknowledge the user's input and gently steer them back to the interview question: {last_assistant_msg}"
 
     reply = llm.invoke([HumanMessage(content=prompt)]).content
+    
     return {**state, "messages": state["messages"] + [{"role": "assistant", "content": reply}]}
 
-# NODE 4: FEEDBACK
+# --- NODE 4: FEEDBACK ---
 def generate_feedback(state: InterviewState) -> InterviewState:
     transcript = "\n".join([f"{m['role']}: {m['content']}" for m in state["messages"]])
     prompt = f"""
-Mock interview complete for {state['role']}.
-
-Transcript:
-{transcript}
-
-Generate spoken feedback as a string:
-"Great job! Overall score: X/10.
-Strengths: - Bullet1 - Bullet2
-Areas for improvement: - Bullet1 - Bullet2
-Communication: ...
-Technical knowledge: ...
-Specific examples: ..."
-
-Keep it structured but natural for voice.
-"""
+    Interview for {state['role']} is done. 
+    Transcript: {transcript}
+    
+    Provide concise feedback (under 50 words) on their performance.
+    """
     closing = llm.invoke([HumanMessage(content=prompt)]).content
     return {
         **state,
@@ -117,17 +145,20 @@ Keep it structured but natural for voice.
         "is_finished": True
     }
 
-# DECISION FUNCTION
+# --- DECISION LOGIC ---
 def decide_next(state: InterviewState):
     if state["question_count"] >= 6:
         return "generate_feedback"
-    if state["latest_evaluation"] in ["Vague", "Off-topic"] or state["persona_detected"] in ["Chatty", "Edge"]:
+    
+    # FIX: Added "Confused" to the special handling list
+    if (state["latest_evaluation"] in ["Vague", "Off-topic"] or 
+        state["persona_detected"] in ["Chatty", "Edge", "Confused"]):
         return "handle_special"
+        
     return "ask_new_question"
 
-# GRAPH
+# --- GRAPH SETUP ---
 workflow = StateGraph(InterviewState)
-
 workflow.add_node("analyze", analyze_input)
 workflow.add_node("ask_new_question", ask_new_question)
 workflow.add_node("handle_special", handle_special)
