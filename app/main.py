@@ -6,34 +6,54 @@ import uuid
 
 app = FastAPI()
 
+
 @app.get("/")
 def read_root():
     return {"status": "Interview Agent Active"}
 
 
-# ---------------------------
-# /chat ENDPOINT
-# ---------------------------
+# ============================================================
+# /chat ENDPOINT  (FINAL VERSION WITH YOUR FIX + PDF LOGIC)
+# ============================================================
 @app.post("/chat")
 async def chat_endpoint(request: Request):
     data = await request.json()
 
-    # Extract user message from Vapi request format
-    try:
-        user_message = data.get("message", {}).get("content", "")
-        if not user_message and "messages" in data:
-            user_message = data["messages"][-1]["content"]
-    except:
+    # ------------------------------
+    # VAPI MESSAGE EXTRACTION FIX
+    # ------------------------------
+    user_message = ""
+
+    # Case 1 → Vapi Tool Call (your current mode)
+    # Payload: {"message": "User text"}
+    if isinstance(data.get("message"), str):
+        user_message = data["message"]
+
+    # Case 2 → Vapi server event object
+    # Payload: {"message": {"role": "user", "content": "..."}}
+    elif isinstance(data.get("message"), dict):
+        user_message = data["message"].get("content", "")
+
+    # Case 3 → Fallback history
+    elif "messages" in data:
+        user_message = data["messages"][-1]["content"]
+
+    # Final fallback
+    if not user_message:
         user_message = "Start Interview"
 
-    # Simple Role Detection (MVP)
+    # -----------------------------------
+    # ROLE DETECTION
+    # -----------------------------------
     role = "Software Engineer"
     if "sales" in user_message.lower() or "sdr" in user_message.lower():
         role = "SDR"
     elif "retail" in user_message.lower():
         role = "Retail Associate"
 
-    # Initialize Graph State (stateless MVP)
+    # -----------------------------------
+    # GRAPH STATE
+    # -----------------------------------
     initial_state = {
         "messages": [{"role": "user", "content": user_message}],
         "role": role,
@@ -45,19 +65,26 @@ async def chat_endpoint(request: Request):
         "feedback": None
     }
 
-    # Run LangGraph
+    # -----------------------------------
+    # RUN GRAPH
+    # -----------------------------------
     result = app_graph.invoke(initial_state)
+
     bot_response = result["messages"][-1].content
 
-    # -------- PDF Logic --------
+    # -----------------------------------
+    # PDF GENERATION
+    # -----------------------------------
     if result.get("is_finished") and result.get("feedback"):
         feedback_data = result["feedback"]
-        pdf_file = create_pdf(feedback_data)
+        create_pdf(feedback_data)
         bot_response += (
-            " Your interview is complete. I have also generated a detailed PDF report for you."
+            " Your interview is complete. I have also generated a PDF report for you."
         )
 
-    # Vapi tool response format
+    # -----------------------------------
+    # RETURN TO VAPI TOOL
+    # -----------------------------------
     return {
         "results": [
             {
@@ -69,9 +96,9 @@ async def chat_endpoint(request: Request):
     }
 
 
-# ---------------------------
-# PDF GENERATION FUNCTION
-# ---------------------------
+# ============================================================
+# PDF CREATION FUNCTION
+# ============================================================
 def create_pdf(feedback_data):
     filename = f"feedback_{uuid.uuid4().hex[:8]}.pdf"
     c = canvas.Canvas(filename, pagesize=letter)
