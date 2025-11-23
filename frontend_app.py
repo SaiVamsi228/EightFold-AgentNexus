@@ -6,7 +6,7 @@ import time
 # --- CONFIGURATION ---
 BACKEND_URL = "https://agent-nexus-be.onrender.com"  # <--- REPLACE WITH YOUR RAILWAY URL
 VAPI_ASSISTANT_ID = "073fcbe8-ce22-43ac-be1a-1f2c2ff77751"      # <--- REPLACE WITH VAPI ASSISTANT ID
-VAPI_PUBLIC_KEY = "59fca437-4db2-41ef-9985-1ed34d01ca00"  # <--- REPLACE WITH VAPI PUBLIC KEY
+VAPI_PUBLIC_KEY = "0ab33e07-7afe-46f7-85dd-e921c7fa28eb"  # <--- REPLACE WITH VAPI PUBLIC KEY
 
 # --- PAGE SETUP ---
 st.set_page_config(page_title="Eightfold Interview Coach", page_icon="🎙️", layout="wide")
