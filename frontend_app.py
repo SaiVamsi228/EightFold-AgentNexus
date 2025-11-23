@@ -4,10 +4,8 @@ import requests
 import json
 
 # --- CONFIGURATION ---
-BACKEND_URL = "https://agent-nexus-be.onrender.com" 
-# I extracted this ID from your Share URL: https://vapi.ai/share/073fcbe8-ce22-43ac-be1a-1f2c2ff77751
-ASSISTANT_ID = "073fcbe8-ce22-43ac-be1a-1f2c2ff77751" 
-# ⚠️ REPLACE THIS WITH YOUR VAPI PUBLIC KEY (Dashboard -> API Keys)
+BACKEND_URL = "https://agent-nexus-be.onrender.com"
+ASSISTANT_ID = "073fcbe8-ce22-43ac-be1a-1f2c2ff77751"
 VAPI_PUBLIC_KEY = "0ab33e07-7afe-46f7-85dd-e921c7fa28eb"
 
 # --- PAGE SETUP ---
@@ -56,12 +54,11 @@ with col1:
     st.title("Interview Practice Partner")
     st.markdown(f"Ready to practice for **{role}**?")
     st.markdown("---")
-    
+
     st.subheader("1️⃣ Start Interview")
     st.markdown("Click below to start the voice session directly in this window.")
 
-    # --- CUSTOM VAPI WEB SDK COMPONENT ---
-    # This injects the Vapi JS SDK and creates a custom button UI
+    # --- FIXED CUSTOM VAPI WEB SDK COMPONENT ---
     vapi_component = f"""
     <div style="display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 20px; background: #1E1E1E; border-radius: 10px; border: 1px solid #333;">
         <button id="vapi-start-btn" style="
@@ -80,11 +77,12 @@ with col1:
         <p id="call-id-display" style="margin-top: 5px; color: #555; font-family: monospace; font-size: 12px;"></p>
     </div>
 
-    <script src="https://cdn.jsdelivr.net/npm/@vapi-ai/web@latest/dist/vapi.min.js"></script>
-    
-    <script>
+    <script type="module">
+        import Vapi from "https://esm.sh/@vapi-ai/web";
+
         const vapi = new Vapi("{VAPI_PUBLIC_KEY}");
         const assistantId = "{ASSISTANT_ID}";
+
         const btn = document.getElementById("vapi-start-btn");
         const status = document.getElementById("vapi-status");
         const callIdDisplay = document.getElementById("call-id-display");
@@ -98,6 +96,7 @@ with col1:
                 try {{
                     await vapi.start(assistantId);
                 }} catch (e) {{
+                    console.error(e);
                     status.innerText = "Error: " + e.message;
                 }}
             }} else {{
@@ -133,28 +132,29 @@ with col1:
         }});
 
         vapi.on("message", (message) => {{
-            // Capture Call ID when available
             if (message.type === "call-start" || (message.call && message.call.id)) {{
                 callIdDisplay.innerText = "Call ID: " + (message.call ? message.call.id : "Active");
             }}
         }});
+
+        vapi.on("error", (e) => {{
+            console.error("Vapi Error:", e);
+            status.innerText = "Error (See Console)";
+        }});
     </script>
     """
-    # Render the HTML component
-    components.html(vapi_component, height=250)
+    components.html(vapi_component, height=300)  # increased height to 300
 
     st.markdown("---")
 
     # --- FEEDBACK SECTION ---
     st.subheader("2️⃣ Post-Interview Feedback")
-    
-    # Input for Call ID (since Vapi generates unique IDs for every call)
+
     target_call_id = st.text_input("Enter Call ID (from above)", value="demo_session_final")
 
     if st.button("Generate Interview Report"):
         with st.spinner("Analyzing interview data..."):
             try:
-                # Fetch feedback from your backend
                 res = requests.get(f"{BACKEND_URL}/get-latest-feedback?call_id={target_call_id}")
                 data = res.json()
 
@@ -162,7 +162,6 @@ with col1:
                     feedback = data["feedback"]
                     transcript = data.get("transcript", [])
 
-                    # Metrics
                     m1, m2, m3 = st.columns(3)
                     with m1:
                         st.markdown(f"""<div class="metric-card"><div class="metric-value">{feedback.get('score', 'N/A')}</div><div class="metric-label">Score</div></div>""", unsafe_allow_html=True)
@@ -171,18 +170,16 @@ with col1:
                     with m3:
                         st.markdown(f"""<div class="metric-card"><div class="metric-value">{feedback.get('confidence', 'High')}</div><div class="metric-label">Confidence</div></div>""", unsafe_allow_html=True)
 
-                    # Strengths & Weaknesses
                     st.success(f"**Strengths:** {', '.join(feedback.get('strengths', ['Good flow']))}")
                     st.warning(f"**Improvements:** {', '.join(feedback.get('improvements', ['More detail needed']))}")
-                    
-                    # Transcript Expander
+
                     with st.expander("View Full Transcript"):
                         for msg in transcript:
                             prefix = "👤 You" if msg['role'] == 'user' else "🤖 AI"
                             st.markdown(f"**{prefix}:** {msg['content']}")
                 else:
                     st.info("Interview currently in progress or no data found for this ID.")
-                    
+
             except Exception as e:
                 st.error(f"Connection Error: {e}")
 
@@ -190,3 +187,5 @@ with col2:
     st.markdown("### 📝 Notes & Live Status")
     st.info("The audio interface is running in the secure component on the left.")
     st.caption("Once the interview finishes, copy the Call ID displayed in the box to generate your personalized report.")
+
+
