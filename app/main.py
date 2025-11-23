@@ -81,3 +81,22 @@ async def chat_endpoint(request: Request):
         return JSONResponse({
             "results": [{"toolCallId": "error", "result": "I had a glitch. Let's continue."}]
         })
+
+# app/main.py (Add this to the bottom)
+
+@app.get("/get-latest-feedback")
+def get_latest_feedback(call_id: str = "default_session"):
+    # Retrieve the state from memory
+    state = get_interview_state(call_id)
+    
+    if not state:
+        return {"status": "No interview found"}
+        
+    if not state.get("feedback"):
+        return {"status": "Interview in progress"}
+        
+    return {
+        "status": "Completed",
+        "feedback": state["feedback"], # The JSON score
+        "transcript": state["messages"] # Full chat history
+    }

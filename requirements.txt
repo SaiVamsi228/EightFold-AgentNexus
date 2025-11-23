@@ -3,3 +3,6 @@ uvicorn
 langchain-google-genai
 langgraph
 python-dotenv
+streamlit
+requests
+streamlit-lottie
