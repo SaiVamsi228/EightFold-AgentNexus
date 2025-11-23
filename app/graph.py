@@ -10,7 +10,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 # Gemini 2.0 Flash
-llm = ChatGoogleGenerativeAI(model="gemini-2.5-flash-lite", temperature=0.2)
+llm = ChatGoogleGenerativeAI(model="gemini-2.0-flash", temperature=0.2)
 
 # --- STATE DEFINITION ---
 class InterviewState(TypedDict):
