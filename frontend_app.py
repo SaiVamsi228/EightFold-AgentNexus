@@ -4,9 +4,10 @@ import json
 import time
 
 # --- CONFIGURATION ---
-BACKEND_URL = "https://agent-nexus-be.onrender.com"  # <--- Replace with your backend URL
-VAPI_ASSISTANT_ID = "073fcbe8-ce22-43ac-be1a-1f2c2ff77751"  # <--- Replace with your Vapi Assistant ID
-VAPI_PUBLIC_KEY = "0ab33e07-7afe-46f7-85dd-e921c7fa28eb"   # <--- Replace with your Vapi Public Key
+# Ensure this URL has NO trailing slash
+BACKEND_URL = "https://agent-nexus-be.onrender.com" 
+# Your Vapi Public Share URL (Get this from Vapi Dashboard -> Assistant -> Share)
+VAPI_SHARE_URL = "https://vapi.ai/share/073fcbe8-ce22-43ac-be1a-1f2c2ff77751"
 
 # --- PAGE SETUP ---
 st.set_page_config(page_title="Eightfold Interview Coach", page_icon="🎙️", layout="wide")
@@ -36,12 +37,13 @@ st.markdown("""
         color: #888;
         font-size: 0.9em;
     }
-
-    /* Title Style */
-    h1 {
-        font-family: 'Helvetica Neue', sans-serif;
-        font-weight: 700;
-        color: #FFFFFF;
+    
+    /* Button Styling */
+    .stButton button {
+        width: 100%;
+        border-radius: 8px;
+        height: 50px;
+        font-weight: bold;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -56,43 +58,33 @@ with st.sidebar:
     resume = st.file_uploader("Upload Resume (Optional)", type=["pdf"])
     
     st.divider()
-    st.info("💡 **Tip:** Speak clearly. The agent will adapt to your answers.")
+    st.info("💡 **Tip:** The interview runs in a secure voice room. Come back here for your results.")
 
 # --- MAIN HERO SECTION ---
 col1, col2 = st.columns([2, 1])
 
 with col1:
     st.title("Interview Practice Partner")
-    st.markdown(f"Ready to practice for **{role}**? Click the microphone button below to start talking.")
+    st.markdown(f"Ready to practice for **{role}**?")
 
-    # --- VAPI IFRAME EMBED (Fixes Sandbox Origin Error) ---
     st.markdown("---")
-    st.subheader("🎤 Start Interview")
+    st.subheader("1️⃣ Start Interview")
+    st.markdown("Click the button below to enter the secure interview room. Speak with the AI agent, then return here for your feedback.")
 
-    # Replace this with your Vapi Public Share URL
-    vapi_url = "https://vapi.ai/share/YOUR_PUBLIC_URL_HERE"
-
-    iframe_code = f"""
-    <iframe 
-        src="{vapi_url}" 
-        width="100%" 
-        height="500px" 
-        frameborder="0" 
-        allow="microphone *; autoplay *"
-        style="border-radius: 10px; border: 1px solid #333; background-color: #000;">
-    </iframe>
-    """
-    st.markdown(iframe_code, unsafe_allow_html=True)
+    # --- THE FIX: LINK BUTTON ---
+    # This opens Vapi in a new tab, bypassing the CSP/Iframe block
+    st.link_button("📞 Launch Secure Interview Room", VAPI_SHARE_URL, type="primary", use_container_width=True)
 
     st.markdown("---")
 
     # --- FEEDBACK SECTION ---
-    st.subheader("📊 Post-Interview Feedback")
+    st.subheader("2️⃣ Post-Interview Feedback")
 
     if st.button("Generate Interview Report"):
-        with st.spinner("Analyzing conversation data..."):
+        with st.spinner("Fetching data from backend..."):
             try:
-                res = requests.get(f"{BACKEND_URL}/get-latest-feedback?call_id=test_session_default")
+                # Using default session ID for demo simplicity
+                res = requests.get(f"{BACKEND_URL}/get-latest-feedback?call_id=demo_session_final")
                 data = res.json()
 
                 if data.get("status") == "Completed":
@@ -117,14 +109,17 @@ with col1:
 
                     st.balloons()
                 else:
-                    st.info("Interview in progress or not started. Finish the call to see results!")
+                    st.info("Interview is either in progress or hasn't started yet.")
+                    st.caption(f"Backend Status: {data.get('status')}")
+                    
             except Exception as e:
-                st.error(f"Could not connect to backend: {e}")
+                st.error(f"Connection Error: {e}")
+                st.caption("Make sure the Backend Render service is active.")
 
 with col2:
     st.markdown("### 📝 Live Transcript")
-    st.caption("Conversation history will appear here after the interview.")
+    st.caption("Conversation history loads here after generation.")
     
     transcript_container = st.container()
     with transcript_container:
-        st.markdown("*Waiting for interview to start...*")
+        st.markdown("*Transcript pending...*")
