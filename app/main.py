@@ -39,14 +39,18 @@ async def chat_endpoint(request: Request):
             # ATTEMPT INITIAL ROLE DETECTION
             role = "Unknown"
             msg_lower = user_message.lower()
-            if "sales" in msg_lower or "sdr" in msg_lower: role = "SDR"
-            elif "retail" in msg_lower: role = "Retail Associate"
-            elif "engineer" in msg_lower or "developer" in msg_lower: role = "Software Engineer"
+            if "sales" in msg_lower or "sdr" in msg_lower: 
+                role = "SDR"
+            elif "retail" in msg_lower: 
+                role = "Retail Associate"
+            elif "engineer" in msg_lower or "developer" in msg_lower: 
+                role = "Software Engineer"
             
+            # ⭐ YOUR CHANGE APPLIED HERE ⭐
             current_state = {
                 "messages": [{"role": "user", "content": user_message}],
                 "role": role, 
-                "question_count": 0,
+                "question_count": 0,    # MUST BE 0
                 "persona_detected": "Normal",
                 "latest_evaluation": "Good",
                 "is_finished": False,
@@ -56,6 +60,7 @@ async def chat_endpoint(request: Request):
                 "retry_count": 0,
                 "current_topic_depth": 0
             }
+
         else:
             print(f"🟢 RESUMING: {call_id} | Role: {current_state['role']}")
             current_state["messages"].append({"role": "user", "content": user_message})
@@ -66,22 +71,25 @@ async def chat_endpoint(request: Request):
 
         # Handle Finish
         if result.get("is_finished"):
-            # Don't clear immediately if you want to read feedback later, 
-            # but usually we want to keep it for the feedback endpoint.
-            # We'll rely on the frontend calling /get-latest-feedback
             save_interview_state(call_id, result) 
             bot_response += " (Session Ended)"
         else:
             save_interview_state(call_id, result)
 
         return JSONResponse({
-            "results": [{"toolCallId": payload.get("toolCallId", "unknown"), "result": bot_response}]
+            "results": [{
+                "toolCallId": payload.get("toolCallId", "unknown"),
+                "result": bot_response
+            }]
         })
 
     except Exception as e:
         print(f"🔴 ERROR: {traceback.format_exc()}")
         return JSONResponse({
-            "results": [{"toolCallId": "error", "result": "I had a glitch. Let's continue."}]
+            "results": [{
+                "toolCallId": "error",
+                "result": "I had a glitch. Let's continue."
+            }]
         })
 
 @app.get("/get-latest-feedback")
