@@ -8,7 +8,7 @@ BACKEND_URL = "https://agent-nexus-be.onrender.com"
 # I extracted this ID from your Share URL: https://vapi.ai/share/073fcbe8-ce22-43ac-be1a-1f2c2ff77751
 ASSISTANT_ID = "073fcbe8-ce22-43ac-be1a-1f2c2ff77751" 
 # ⚠️ REPLACE THIS WITH YOUR VAPI PUBLIC KEY (Dashboard -> API Keys)
-VAPI_PUBLIC_KEY = "YOUR_VAPI_PUBLIC_KEY_HERE"
+VAPI_PUBLIC_KEY = "0ab33e07-7afe-46f7-85dd-e921c7fa28eb"
 
 # --- PAGE SETUP ---
 st.set_page_config(page_title="Eightfold Interview Coach", page_icon="🎙️", layout="wide")
