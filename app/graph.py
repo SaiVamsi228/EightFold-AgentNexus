@@ -8,19 +8,18 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-# LLM instance
+# Temperature 0.4 gives a balance of creativity and adherence to instructions
 llm = ChatGoogleGenerativeAI(model="gemini-2.0-flash", temperature=0.4)
 
-# Maximum follow-up depth
-MAX_DEPTH = 3
+MAX_DEPTH = 3  # Maximum follow-up questions per topic
 
-# --- STATE MODEL ---
+# --- STATE DEFINITION ---
 class InterviewState(TypedDict):
     messages: List[Dict[str, str]]
     role: str
     question_count: int
-    persona_detected: str
-    latest_evaluation: str
+    persona_detected: str       # "Confused", "Distracted", "Efficient", "Normal", "End_Session"
+    latest_evaluation: str      # "Good", "Vague", "Off-topic"
     is_finished: bool
     feedback: str
     used_questions: List[str]
@@ -28,210 +27,214 @@ class InterviewState(TypedDict):
     retry_count: int
     current_topic_depth: int
 
-# ============================================================
-# ✅ NODE 1 (UPDATED COMPLETELY): ANALYZE INPUT
-# ============================================================
+# --- NODE 1: ANALYZE INPUT ---
 def analyze_input(state: InterviewState) -> InterviewState:
-    # If no messages yet → skip analysis
+    # CRITICAL GUARD: If history is empty, skip analysis. 
+    # This happens on the very first turn when the bot starts the interview.
     if not state["messages"]:
         return {**state, "persona_detected": "Normal", "latest_evaluation": "Good"}
 
     user_input = state["messages"][-1]["content"]
-
-    # Immediate Exit
-    if any(k in user_input.lower() for k in ["end interview", "stop", "quit", "finish"]):
+    
+    # 1. IMMEDIATE EXIT CHECK
+    if any(keyword in user_input.lower() for keyword in ["end interview", "stop interview", "quit", "finish"]):
         return {**state, "persona_detected": "End_Session", "is_finished": True}
 
-    # SIMPLE ANALYSIS PROMPT
-    current_context = state.get("active_question", "Introduction")
+    # 2. HANDLE UNKNOWN ROLE RECOVERY
+    if state["role"] == "Unknown":
+        role_check_prompt = f"User input: '{user_input}'. Extract the job role. Return ONLY the role name. If none, return 'Unknown'."
+        detected_role = llm.invoke([HumanMessage(content=role_check_prompt)]).content.strip().replace('"', '')
+        if detected_role != "Unknown" and len(detected_role) < 50:
+             return {**state, "role": detected_role, "persona_detected": "Normal", "question_count": 0}
 
+    # 3. NORMAL ANALYSIS
+    current_context = state.get("active_question", "Introduction")
     prompt = f"""
+    You are an Interview Analyst.
     Role: {state['role']}
     Question asked: "{current_context}"
     User Answer: "{user_input}"
     
-    Task: Analyze the user's answer.
+    Classify the User:
+    1. PERSONA:
+       - "Confused": Asks for help, doesn't understand.
+       - "Distracted": Talks about pizza, noise, life, irrelevant things.
+       - "Efficient": Short, blunt answers.
+       - "Normal": Attempts to answer.
     
-    Classify Persona:
-    - Confused
-    - Distracted
-    - Normal
+    2. EVALUATION:
+       - "Good": Relevant answer.
+       - "Vague": Too short, needs more detail.
+       - "Off-topic": Completely unrelated to the question.
     
-    Classify Evaluation:
-    - Good
-    - Vague
-    - Off-topic
-    
-    Return JSON only: {{ "persona": "...", "evaluation": "..." }}
+    Return JSON: {{ "persona": "...", "evaluation": "..." }}
     """
-
+    
     try:
         resp = llm.invoke([HumanMessage(content=prompt)])
-        cleaned = resp.content.replace("```json", "").replace("```", "")
-        data = json.loads(re.search(r"\{.*\}", cleaned, re.DOTALL).group(0))
+        content = resp.content.strip().replace("```json", "").replace("```", "")
+        match = re.search(r'\{.*\}', content, re.DOTALL)
+        data = json.loads(match.group(0)) if match else {"persona": "Normal", "evaluation": "Good"}
     except:
         data = {"persona": "Normal", "evaluation": "Good"}
 
     return {
-        **state,
-        "persona_detected": data.get("persona", "Normal"),
+        **state, 
+        "persona_detected": data.get("persona", "Normal"), 
         "latest_evaluation": data.get("evaluation", "Good")
     }
 
-# ============================================================
-# NODE 2: ASK NEW QUESTION
-# ============================================================
+# --- NODE 2: ASK DYNAMIC QUESTION ---
 def ask_new_question(state: InterviewState) -> InterviewState:
+    # Handling "Unknown" at the start
     if state["role"] == "Unknown":
         return {
             **state,
-            "messages": state["messages"] + [{
-                "role": "assistant",
-                "content": "Hi! What job role are you targeting today?"
-            }],
+            "messages": state["messages"] + [{"role": "assistant", "content": "Hi! I can help you prepare for your interview. What job role are you targeting today?"}],
         }
 
     q_type = "behavioral" if state["question_count"] % 2 == 0 else "technical"
-    avoid_topics = ", ".join(state.get("used_questions", [])[-3:])
-
+    avoid_topics = ", ".join(state.get("used_questions", [])[-3:]) 
+    
     prompt = f"""
-    Generate a {q_type} interview question for a {state['role']}.
-    Avoid: {avoid_topics}.
-    Only output the question.
+    Generate a single, challenging {q_type} interview question for a {state['role']}.
+    Topics to avoid: {avoid_topics}.
+    Return ONLY the question text.
     """
-
-    new_q = llm.invoke([HumanMessage(content=prompt)]).content.strip()
-
+    new_question = llm.invoke([HumanMessage(content=prompt)]).content.strip()
+    
+    # Contextual Transition
     prefix = ""
     if state["question_count"] == 0:
-        prefix = f"Great. Let's start your {state['role']} interview. "
+        prefix = f"Great. Let's start the {state['role']} interview. "
     elif state["latest_evaluation"] == "Good":
-        prefix = "Good answer. Let's move on. "
+        prefix = "Good. Moving on. "
     else:
-        prefix = "Okay, let's switch gears. "
+        prefix = "Okay, let's switch topics. "
 
     return {
-        **state,
-        "messages": state["messages"] + [{
-            "role": "assistant",
-            "content": prefix + new_q
-        }],
+        **state, 
+        "messages": state["messages"] + [{"role": "assistant", "content": f"{prefix}{new_question}"}], 
         "question_count": state["question_count"] + 1,
-        "used_questions": state["used_questions"] + [new_q],
-        "active_question": new_q,
+        "used_questions": state.get("used_questions", []) + [new_question],
+        "active_question": new_question,
         "retry_count": 0,
         "current_topic_depth": 1
     }
 
-# ============================================================
-# NODE 3: FOLLOW-UP QUESTION
-# ============================================================
+# --- NODE 3: DEEP DIVE (FOLLOW-UP) ---
 def ask_follow_up(state: InterviewState) -> InterviewState:
-    last = state["messages"][-1]["content"]
-    q = state.get("active_question")
-
+    last_user_msg = state["messages"][-1]["content"]
+    current_q = state.get("active_question")
+    
     prompt = f"""
     Role: {state['role']}
-    Main Question: "{q}"
-    User Answer: "{last}"
-
-    Generate a deeper follow-up question.
+    Question: "{current_q}"
+    User Answer: "{last_user_msg}"
+    
+    Generate a follow-up question.
+    - If they missed details, ask for a specific example.
+    - If they were good, challenge a trade-off or implementation detail.
+    - Keep it short and sharp.
     """
-
-    follow = llm.invoke([HumanMessage(content=prompt)]).content.strip()
-
+    
+    follow_up = llm.invoke([HumanMessage(content=prompt)]).content.strip()
+    
     return {
         **state,
-        "messages": state["messages"] + [{"role": "assistant", "content": follow}],
-        "current_topic_depth": state["current_topic_depth"] + 1,
+        "messages": state["messages"] + [{"role": "assistant", "content": follow_up}],
+        "current_topic_depth": state.get("current_topic_depth", 0) + 1,
         "retry_count": 0
     }
 
-# ============================================================
-# ✅ NODE 4 (UPDATED COMPLETELY): HANDLE SPECIAL CASES
-# ============================================================
+# --- NODE 4: HANDLE SPECIAL CASES ---
 def handle_special(state: InterviewState) -> InterviewState:
     target = state.get("active_question", "the interview")
     persona = state["persona_detected"]
-
+    
+    # STRICT SCENARIO MAPPING
+    scenario = ""
     if persona == "Confused":
-        instruction = f"The user is confused about '{target}'. Explain it simply. Do NOT ask a new question."
+        scenario = f"The user is confused about: '{target}'. Explain it simply."
     elif persona == "Distracted":
-        instruction = f"The user is distracted. Politely acknowledge it and repeat the question '{target}'."
+        scenario = f"The user is talking about unrelated things (pizza, noise, etc). Politely ignore the distraction and repeat the question: '{target}'."
     elif state["latest_evaluation"] == "Vague":
-        instruction = f"The answer was vague. Ask them for a specific example related to '{target}'."
+        scenario = f"The user's answer was too vague. Ask for a specific example regarding: '{target}'."
     else:
-        instruction = f"The user is off-topic. Bring them back to the question '{target}'."
-
+        scenario = f"The user is off-topic. Steer them back to: '{target}'."
+        
     prompt = f"""
-    You are the Interviewer.
-    Instruction: {instruction}
-    Generate a concise professional reply.
+    You are a professional Interviewer.
+    Scenario: {scenario}
+    
+    Generate a response to the user. Do NOT say "User is...". Speak directly to the candidate.
     """
-
+    
     reply = llm.invoke([HumanMessage(content=prompt)]).content.strip()
-
+    
     return {
         **state,
         "messages": state["messages"] + [{"role": "assistant", "content": reply}],
-        "retry_count": state["retry_count"] + 1
+        "retry_count": state.get("retry_count", 0) + 1
     }
 
-# ============================================================
-# NODE 5: GENERATE FEEDBACK
-# ============================================================
+# --- NODE 5: FEEDBACK GENERATION ---
 def generate_feedback(state: InterviewState) -> InterviewState:
-    transcript = "\n".join([f"{m['role']}: {m['content']}" for m in state["messages"]])
-
+    transcript = "\n".join([f"{m['role']}: {m['content']}" for m in state['messages'] if m['role'] != 'system'])
+    
     prompt = f"""
-    Act as a Hiring Manager for {state['role']}.
+    Act as a Hiring Manager for a {state['role']} position.
     Review this transcript:
-
     {transcript}
-
-    Generate detailed Markdown feedback.
+    
+    Generate a Markdown feedback report:
+    # Interview Feedback: {state['role']}
+    ## 1. Executive Summary
+    ## 2. Strengths
+    ## 3. Areas for Improvement
+    ## 4. Hiring Recommendation
     """
-
-    fb = llm.invoke([HumanMessage(content=prompt)]).content
-
+    
+    report = llm.invoke([HumanMessage(content=prompt)]).content
+    
     return {
         **state,
-        "messages": state["messages"] + [
-            {"role": "assistant", "content": "Thanks! I've prepared your feedback."}
-        ],
-        "feedback": fb,
+        "messages": state["messages"] + [{"role": "assistant", "content": "Thank you! I've prepared your feedback report."}],
+        "feedback": report,
         "is_finished": True
     }
 
-# ============================================================
-# ✅ UPDATED ROUTER (APPLIES YOUR LOGIC)
-# ============================================================
+# --- ROUTING LOGIC (THE BRAIN) ---
 def decide_next(state: InterviewState):
-    if state["persona_detected"] == "End_Session":
-        return "generate_feedback"
-
-    # Force first question immediately
+    if state.get("is_finished"): return END
+    
+    # 1. INITIALIZATION CHECK (This prevents the 'Dense Question' bug)
     if state["question_count"] == 0:
         return "ask_new_question"
+        
+    # 2. EXIT & LIMIT CHECKS
+    if state["persona_detected"] == "End_Session": return "generate_feedback"
+    if state["question_count"] >= 5: return "generate_feedback"
+    if state.get("retry_count", 0) >= 2: return "ask_new_question"
 
-    if state["question_count"] >= 5:
-        return "generate_feedback"
-
+    # 3. SPECIAL HANDLING (Distraction/Confusion)
     if state["persona_detected"] in ["Confused", "Distracted", "Off-topic"]:
-        if state["retry_count"] >= 2:
-            return "ask_new_question"
         return "handle_special"
 
+    # 4. NORMAL FLOW
     if state["latest_evaluation"] == "Good":
-        if state["current_topic_depth"] < MAX_DEPTH:
+        if state["persona_detected"] == "Efficient": return "ask_new_question"
+        
+        # Depth Check
+        if state.get("current_topic_depth", 1) < MAX_DEPTH:
             return "ask_follow_up"
+        
         return "ask_new_question"
 
+    # Default fallback for Vague/Bad answers
     return "handle_special"
 
-# ============================================================
-# GRAPH BUILD
-# ============================================================
+# --- COMPILE ---
 workflow = StateGraph(InterviewState)
 workflow.add_node("analyze", analyze_input)
 workflow.add_node("ask_new_question", ask_new_question)
@@ -246,6 +249,7 @@ workflow.add_conditional_edges("analyze", decide_next, {
     "ask_follow_up": "ask_follow_up",
     "handle_special": "handle_special",
     "generate_feedback": "generate_feedback",
+    END: END
 })
 
 workflow.add_edge("ask_new_question", END)
