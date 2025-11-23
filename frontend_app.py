@@ -48,7 +48,6 @@ st.markdown("""
 
 # --- SIDEBAR ---
 with st.sidebar:
-    # Replace the old image line with this:
     st.image("https://cdn-icons-png.flaticon.com/512/3135/3135715.png", width=100)
     st.markdown("### ⚙️ Interview Settings")
     
@@ -66,53 +65,62 @@ with col1:
     st.title("Interview Practice Partner")
     st.markdown(f"Ready to practice for **{role}**? Click the microphone button below to start talking.")
     
-    # --- VAPI WEB WIDGET EMBED ---
-    # This injects the Vapi voice button directly into the page
-    vapi_html = f"""
-    <script>
-      var vapiInstance = null;
-      const assistantId = "{VAPI_ASSISTANT_ID}"; 
-      const apiKey = "{VAPI_PUBLIC_KEY}"; 
-      const buttonConfig = {{
-        position: "bottom-right", 
-        offset: "40px", 
-        width: "50px", 
-        height: "50px",
-        idle: {{ icon: "https://unpkg.com/lucide-static@0.321.0/icons/mic.svg", color: "#fff" }},
-        loading: {{ color: "#fff" }},
-        active: {{ color: "#00D26A" }} 
-      }};
+    # --- REPLACED VAPI WIDGET SECTION ---
+    st.markdown("---")
+    st.subheader("🎤 Start Interview")
 
-      (function(d, t) {{
-        var g = d.createElement(t), s = d.getElementsByTagName(t)[0];
-        g.src = "https://cdn.jsdelivr.net/gh/VapiAI/html-script-tag@latest/dist/assets/index.js";
-        g.defer = true;
-        g.async = true;
-        s.parentNode.insertBefore(g, s);
-
-        g.onload = function() {{
-          vapiInstance = window.vapiSDK.run({{
-            apiKey: apiKey, 
-            assistant: assistantId,
-            config: buttonConfig
-          }});
+    # We use a height of 300px to ensure the Vapi popup isn't cut off
+    # We allow "microphone" in the sandbox parameters
+    vapi_code = f"""
+    <!DOCTYPE html>
+    <html>
+    <body>
+      <script>
+        var vapiInstance = null;
+        const assistantId = "{VAPI_ASSISTANT_ID}"; 
+        const apiKey = "{VAPI_PUBLIC_KEY}"; 
+        const buttonConfig = {{
+          position: "center", 
+          width: "80px", 
+          height: "80px",
+          idle: {{ icon: "https://unpkg.com/lucide-static@0.321.0/icons/mic.svg", color: "#fff" }},
+          loading: {{ color: "#fff" }},
+          active: {{ color: "#00D26A" }} 
         }};
-      }})(document, "script");
-    </script>
+
+        (function(d, t) {{
+          var g = d.createElement(t), s = d.getElementsByTagName(t)[0];
+          g.src = "https://cdn.jsdelivr.net/gh/VapiAI/html-script-tag@latest/dist/assets/index.js";
+          g.defer = true;
+          g.async = true;
+          s.parentNode.insertBefore(g, s);
+
+          g.onload = function() {{
+            vapiInstance = window.vapiSDK.run({{
+              apiKey: apiKey, 
+              assistant: assistantId,
+              config: buttonConfig
+            }});
+          }};
+        }})(document, "script");
+      </script>
+    </body>
+    </html>
     """
-    # Create a placeholder for the Vapi button
-    st.components.v1.html(vapi_html, height=100)
+    
+    # Renders with specific permission height
+    st.components.v1.html(vapi_code, height=300, scrolling=False)
     
     st.markdown("---")
     
     # --- FEEDBACK SECTION ---
     st.subheader("📊 Post-Interview Feedback")
     
-    # Button to fetch results manually (since we don't have websockets set up for the demo)
+    # Button to fetch results manually
     if st.button("Generate Interview Report"):
         with st.spinner("Analyzing conversation data..."):
             try:
-                # In a real app, we'd use the dynamic call_id. For the demo, we use the default.
+                # For demo, we use a default call_id
                 res = requests.get(f"{BACKEND_URL}/get-latest-feedback?call_id=test_session_default")
                 data = res.json()
                 
