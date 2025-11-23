@@ -9,7 +9,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-llm = ChatGoogleGenerativeAI(model="gemini-2.0-flash", temperature=0.2)
+llm = ChatGoogleGenerativeAI(model="gemini-2.0-flash", temperature=0.3)
 
 # --- STATE DEFINITION ---
 class InterviewState(TypedDict):
@@ -25,8 +25,8 @@ class InterviewState(TypedDict):
     retry_count: int
     current_topic_depth: int
 
-# --- QUESTION BANK ---
-# (Keep your existing QUESTIONS_DB here - I am omitting it to save space)
+# --- QUESTION BANK (Same as before) ---
+# ... (Keep your QUESTIONS_DB dictionary here) ...
 QUESTIONS_DB = {
   "Software Engineer": {
     "technical": ["Explain process vs thread?", "Design a URL shortener?", "TCP vs UDP?", "Explain Dependency Injection?", "Debug memory leak?", "RESTful API concept?", "SQL vs NoSQL?", "Garbage collection?", "ACID properties?", "Polymorphism?"],
@@ -45,9 +45,8 @@ QUESTIONS_DB = {
 def load_questions(role: str):
     return QUESTIONS_DB.get(role, QUESTIONS_DB["Software Engineer"])
 
-# --- NODE 1: ANALYZE (FIXED) ---
+# --- NODE 1: ANALYZE ( Improved ) ---
 def analyze_input(state: InterviewState) -> InterviewState:
-    # !!! CRITICAL FIX: If no messages exist, skip analysis !!!
     if not state["messages"]:
         return {**state, "persona_detected": "Normal", "latest_evaluation": "Good"}
 
@@ -59,9 +58,17 @@ def analyze_input(state: InterviewState) -> InterviewState:
     Context (Last Question): "{last_q}"
     Candidate Response: "{user_input}"
     
-    Analyze:
-    1. PERSONA: Confused, Efficient, Chatty, Edge, Normal.
-    2. EVALUATION: Vague, Good, Off-topic.
+    Analyze the response:
+    1. PERSONA:
+       - "Distracted": Mentions dogs, food, noise, weather, or unrelated life stories.
+       - "Confused": Says "I don't understand", "Clarify", "What?".
+       - "Efficient": One word answer like "Pass", "Next".
+       - "Normal": Attempts to answer the question.
+    
+    2. EVALUATION:
+       - "Off-topic": Completely unrelated (e.g., talking about a dog).
+       - "Vague": Too short to be useful.
+       - "Good": Relevant attempt.
     
     Return JSON ONLY: {{ "persona": "...", "evaluation": "..." }}
     """
@@ -83,24 +90,27 @@ def analyze_input(state: InterviewState) -> InterviewState:
         "latest_evaluation": data.get("evaluation", "Good")
     }
 
-# --- NODE 2: ASK NEW QUESTION ---
+# --- NODE 2: ASK NEW QUESTION (Direct Speech) ---
 def ask_new_question(state: InterviewState) -> InterviewState:
     questions = load_questions(state["role"])
     q_type = "behavioral" if state["question_count"] % 2 == 0 else "technical"
     
-    # Avoid repeats
     used = state.get("used_questions", [])
     available = [q for q in questions[q_type] if q not in used]
     if not available: available = questions[q_type]
     
     base_question = random.choice(available)
 
+    # Use LLM to generate the *exact* spoken text to ensure flow
+    transition_prompt = ""
     if state["question_count"] == 0:
-        final_q = f"Great. Let's start the {state['role']} interview. {base_question}"
+        transition_prompt = f"You are starting a {state['role']} interview. Say: 'Great. Let's start the {state['role']} interview.' followed immediately by the question: '{base_question}'."
     elif state["persona_detected"] == "Efficient":
-        final_q = base_question
+        transition_prompt = f"Ask this question directly with no fluff: '{base_question}'"
     else:
-        final_q = f"Got it. Next question: {base_question}"
+        transition_prompt = f"Acknowledge the previous answer briefly (e.g. 'Got it' or 'Makes sense'), then ask: '{base_question}'."
+
+    final_q = llm.invoke([HumanMessage(content=transition_prompt)]).content.strip().replace('"', '')
 
     return {
         **state,
@@ -110,23 +120,35 @@ def ask_new_question(state: InterviewState) -> InterviewState:
         "active_question": base_question
     }
 
-# --- NODE 3: HANDLE SPECIAL ---
+# --- NODE 3: HANDLE SPECIAL (Strict Speech Control) ---
 def handle_special(state: InterviewState) -> InterviewState:
     last_q = state.get("active_question", "the topic")
     user_input = state["messages"][-1]["content"]
     persona = state["persona_detected"]
 
+    # Explicit instructions for exact speech
+    instruction = ""
     if persona == "Confused":
-        task = f"User is confused by '{last_q}'. Simplify it and ask again."
+        instruction = f"The user is confused by '{last_q}'. Explain the concept simply in 1 sentence, then ask them to try again."
+    elif persona == "Distracted" or state["latest_evaluation"] == "Off-topic":
+        instruction = f"The user is distracted by '{user_input}'. Say something empathetic like 'I understand that can be distracting', but then FIRMLY say: 'Let's get back to the question: {last_q}'."
     elif state["latest_evaluation"] == "Vague":
-        task = f"User answer '{user_input}' was too vague. Ask for a specific example."
+        instruction = f"The user's answer was too short. Ask: 'Could you give me a specific example for that?'"
     else:
-        task = f"User is off-topic. Politely bring them back to: '{last_q}'."
+        instruction = f"Politely steer the user back to the question: '{last_q}'."
 
-    reply = llm.invoke([SystemMessage(content="You are an Interviewer."), HumanMessage(content=task)]).content.strip()
+    prompt = f"""
+    You are an AI Interviewer. 
+    Instruction: {instruction}
+    
+    Output ONLY the text you want to speak to the candidate. Do not add "Assistant:" or quotes.
+    """
+
+    reply = llm.invoke([HumanMessage(content=prompt)]).content.strip().replace('"', '')
+    
     return {**state, "messages": state["messages"] + [{"role": "assistant", "content": reply}]}
 
-# --- NODE 4: FEEDBACK ---
+# --- NODE 4: FEEDBACK (JSON) ---
 def generate_feedback(state: InterviewState) -> InterviewState:
     transcript = "\n".join([f"{m['role']}: {m['content']}" for m in state['messages'] if m['role'] != 'system'])
     
@@ -163,7 +185,11 @@ def decide_next(state: InterviewState):
     if state["question_count"] == 0: return "ask_new_question"
     if state["question_count"] >= 5: return "generate_feedback"
     
-    if state["latest_evaluation"] in ["Vague", "Off-topic"] or state["persona_detected"] in ["Confused", "Chatty", "Edge"]:
+    # Prioritize Persona Detection for routing
+    if state["persona_detected"] in ["Confused", "Distracted", "Edge"]:
+        return "handle_special"
+    
+    if state["latest_evaluation"] in ["Vague", "Off-topic"]:
         return "handle_special"
         
     return "ask_new_question"
