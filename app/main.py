@@ -11,7 +11,6 @@ app = FastAPI()
 async def chat_endpoint(request: Request):
     try:
         payload = await request.json()
-        
         call_id = payload.get("call", {}).get("id", "demo_session_final")
         
         # Message Extraction
@@ -37,17 +36,16 @@ async def chat_endpoint(request: Request):
         if not current_state:
             print(f"🔵 STARTING NEW SESSION: {call_id}")
             
-            # ROLE DETECTION HAPPENS ONLY HERE (ONCE)
-            role = "Software Engineer"
+            # ATTEMPT INITIAL ROLE DETECTION
+            role = "Unknown"
             msg_lower = user_message.lower()
             if "sales" in msg_lower or "sdr" in msg_lower: role = "SDR"
             elif "retail" in msg_lower: role = "Retail Associate"
-            
-            print(f"🔒 Role Locked: {role}")
+            elif "engineer" in msg_lower or "developer" in msg_lower: role = "Software Engineer"
             
             current_state = {
                 "messages": [{"role": "user", "content": user_message}],
-                "role": role, # Fixed for the session
+                "role": role, 
                 "question_count": 0,
                 "persona_detected": "Normal",
                 "latest_evaluation": "Good",
@@ -55,19 +53,23 @@ async def chat_endpoint(request: Request):
                 "feedback": None,
                 "used_questions": [],
                 "active_question": "",
-                "retry_count": 0
+                "retry_count": 0,
+                "current_topic_depth": 0
             }
         else:
             print(f"🟢 RESUMING: {call_id} | Role: {current_state['role']}")
-            # We do NOT update the role here. It remains whatever was set in the DB.
             current_state["messages"].append({"role": "user", "content": user_message})
 
-        # Execute
+        # Execute Graph
         result = app_graph.invoke(current_state)
         bot_response = result["messages"][-1]["content"]
 
+        # Handle Finish
         if result.get("is_finished"):
-            clear_interview_state(call_id)
+            # Don't clear immediately if you want to read feedback later, 
+            # but usually we want to keep it for the feedback endpoint.
+            # We'll rely on the frontend calling /get-latest-feedback
+            save_interview_state(call_id, result) 
             bot_response += " (Session Ended)"
         else:
             save_interview_state(call_id, result)
@@ -82,21 +84,18 @@ async def chat_endpoint(request: Request):
             "results": [{"toolCallId": "error", "result": "I had a glitch. Let's continue."}]
         })
 
-# app/main.py (Add this to the bottom)
-
 @app.get("/get-latest-feedback")
-def get_latest_feedback(call_id: str = "default_session"):
-    # Retrieve the state from memory
+def get_latest_feedback(call_id: str = "demo_session_final"):
     state = get_interview_state(call_id)
     
     if not state:
         return {"status": "No interview found"}
         
-    if not state.get("feedback"):
+    if not state.get("is_finished"):
         return {"status": "Interview in progress"}
         
     return {
         "status": "Completed",
-        "feedback": state["feedback"], # The JSON score
-        "transcript": state["messages"] # Full chat history
+        "feedback": state.get("feedback", "No feedback generated."),
+        "transcript": state["messages"]
     }
