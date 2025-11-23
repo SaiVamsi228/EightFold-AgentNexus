@@ -7,17 +7,24 @@ import json
 
 app = FastAPI()
 
+@app.get("/")
+def home():
+    return {"status": "Eightfold AI Agent Active"}
+
 @app.post("/chat")
 async def chat_endpoint(request: Request):
     try:
         payload = await request.json()
         
-        call_id = payload.get("call", {}).get("id", "demo_session_final")
+        # 1. GET CALL ID
+        call_id = payload.get("call", {}).get("id", "test_session_default")
         
-        # Message Extraction
+        # 2. GET USER MESSAGE (Handle various input formats)
         user_message = ""
         if isinstance(payload.get("message"), dict): 
              user_message = payload.get("message", {}).get("content", "")
+             if not user_message:
+                 user_message = payload.get("message", {}).get("toolCall", {}).get("function", {}).get("arguments", {}).get("message", "")
         elif isinstance(payload.get("message"), str):
              try:
                  parsed = json.loads(payload["message"])
@@ -31,41 +38,39 @@ async def chat_endpoint(request: Request):
         if not user_message: 
             user_message = "Start Interview"
 
-        # Retrieve State
+        # 3. RETRIEVE STATE
         current_state = get_interview_state(call_id)
 
+        # 4. INITIALIZE IF NEW CALL
         if not current_state:
-            print(f"🔵 STARTING NEW SESSION: {call_id}")
+            print(f"New Call Detected: {call_id}")
             
-            # ROLE DETECTION HAPPENS ONLY HERE (ONCE)
+            # Detect Role from first message
             role = "Software Engineer"
-            msg_lower = user_message.lower()
-            if "sales" in msg_lower or "sdr" in msg_lower: role = "SDR"
-            elif "retail" in msg_lower: role = "Retail Associate"
-            
-            print(f"🔒 Role Locked: {role}")
+            if "sales" in user_message.lower(): role = "SDR"
+            elif "retail" in user_message.lower(): role = "Retail Associate"
             
             current_state = {
                 "messages": [{"role": "user", "content": user_message}],
-                "role": role, # Fixed for the session
+                "role": role,
                 "question_count": 0,
                 "persona_detected": "Normal",
                 "latest_evaluation": "Good",
                 "is_finished": False,
                 "feedback": None,
-                "used_questions": [],
-                "active_question": "",
-                "retry_count": 0
+                "used_questions": [] # Initialize tracking list
             }
         else:
-            print(f"🟢 RESUMING: {call_id} | Role: {current_state['role']}")
-            # We do NOT update the role here. It remains whatever was set in the DB.
+            print(f"Resuming Call {call_id} - Question Count: {current_state['question_count']}")
             current_state["messages"].append({"role": "user", "content": user_message})
 
-        # Execute
+        # 5. RUN GRAPH
         result = app_graph.invoke(current_state)
+        
+        # 6. EXTRACT RESPONSE
         bot_response = result["messages"][-1]["content"]
 
+        # 7. SAVE STATE
         if result.get("is_finished"):
             clear_interview_state(call_id)
             bot_response += " (Session Ended)"
@@ -77,7 +82,7 @@ async def chat_endpoint(request: Request):
         })
 
     except Exception as e:
-        print(f"🔴 ERROR: {traceback.format_exc()}")
+        print(f"CRITICAL ERROR: {traceback.format_exc()}")
         return JSONResponse({
-            "results": [{"toolCallId": "error", "result": "I had a glitch. Let's continue."}]
+            "results": [{"toolCallId": "error", "result": "I encountered a technical glitch. Let's try that again."}]
         })
